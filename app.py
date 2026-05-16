@@ -1,7 +1,7 @@
 from pathlib import Path
 import sys
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
 
 ROOT = Path(__file__).resolve().parent
@@ -28,6 +28,16 @@ def index():
 @app.get("/favicon.ico")
 def favicon():
     return ("", 204)
+
+
+@app.get("/project-assets/screenshots/<path:filename>")
+def project_screenshot(filename):
+    return send_from_directory(ROOT / "docs" / "screenshots", filename)
+
+
+@app.get("/project-assets/training-notebook/<path:filename>")
+def training_notebook_screenshot(filename):
+    return send_from_directory(ROOT / "docs" / "screenshots" / "training-notebook", filename)
 
 
 @app.get("/api/health")
@@ -69,4 +79,7 @@ def analyze_video():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
+    import os
+    # Hugging Face Spaces use port 7860 by default
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

@@ -12,8 +12,112 @@
         <h1>Violence Detection Platform</h1>
         <p>Live threat scoring from camera or uploaded video</p>
       </div>
-      <div class="status" id="runtimeStatus">Checking runtime...</div>
+      <div class="topbar-actions">
+        <button id="infoBtn" class="info-button" type="button" aria-haspopup="dialog" aria-controls="infoModal">Info</button>
+        <div class="status" id="runtimeStatus">Checking runtime...</div>
+      </div>
     </header>
+
+    <div id="infoModal" class="modal-backdrop" hidden>
+      <section class="info-modal" role="dialog" aria-modal="true" aria-labelledby="infoTitle">
+        <div class="modal-header">
+          <div>
+            <h2 id="infoTitle">Model & Training Info</h2>
+            <p>Project details from the UCF-Crime training notebook and saved reports</p>
+          </div>
+          <button id="closeInfoBtn" class="icon-button" type="button" aria-label="Close info panel">x</button>
+        </div>
+
+        <div class="info-grid">
+          <article>
+            <h3>Model Used</h3>
+            <dl class="info-list">
+              <div><dt>Feature extractor</dt><dd>VideoMAE / ViT-Base features, 768 dimensions</dd></div>
+              <div><dt>Classifier</dt><dd>AnomalyTransformer temporal encoder</dd></div>
+              <div><dt>Architecture</dt><dd>768 -> 512 projection, 4 Transformer layers, 8 heads, FF 1024, dropout 0.3</dd></div>
+              <div><dt>Parameters</dt><dd>9,201,922 trainable parameters</dd></div>
+              <div><dt>Runtime checkpoint</dt><dd>best_model.pt, 105.38 MB</dd></div>
+            </dl>
+          </article>
+
+          <article>
+            <h3>Training Setup</h3>
+            <dl class="info-list">
+              <div><dt>Epoch budget</dt><dd>50 epochs with early stopping patience 10</dd></div>
+              <div><dt>Best epoch</dt><dd>Epoch 21, validation AUC 93.25%, validation accuracy 85.16%</dd></div>
+              <div><dt>Optimizer</dt><dd>AdamW, learning rate 3e-4, weight decay 1e-4</dd></div>
+              <div><dt>Scheduler</dt><dd>CosineAnnealingLR</dd></div>
+              <div><dt>Loss</dt><dd>Weighted CrossEntropy with label smoothing 0.1</dd></div>
+            </dl>
+          </article>
+
+          <article>
+            <h3>Data Used</h3>
+            <dl class="info-list">
+              <div><dt>Dataset</dt><dd>UCF-Crime VideoMAE feature dataset</dd></div>
+              <div><dt>Feature files</dt><dd>1,890 .npy files across normal and anomaly categories</dd></div>
+              <div><dt>Dataset folder size</dt><dd>1.98 GB in the pasted project folder</dd></div>
+              <div><dt>Split</dt><dd>70% train, 15% validation, 15% test</dd></div>
+              <div><dt>Train / Val / Test</dt><dd>1,323 / 283 / 284 videos</dd></div>
+            </dl>
+          </article>
+
+          <article>
+            <h3>Notebook Result</h3>
+            <div class="result-stats">
+              <div><span>Test Accuracy</span><strong>92.25%</strong></div>
+              <div><span>Test ROC AUC</span><strong>94.96%</strong></div>
+              <div><span>Average Precision</span><strong>94.49%</strong></div>
+              <div><span>Best Val AUC</span><strong>93.25%</strong></div>
+            </div>
+          </article>
+        </div>
+
+        <div class="category-panel">
+          <div>
+            <h3>Feature Categories</h3>
+            <p>Normal folders are treated as label 0; every other category is anomaly label 1.</p>
+          </div>
+          <div class="category-bars">
+            <span style="--w:50%">Normal 940</span>
+            <span style="--w:8%">RoadAccidents 150</span>
+            <span style="--w:8%">Robbery 150</span>
+            <span style="--w:5.3%">Burglary 100</span>
+            <span style="--w:5.3%">Stealing 100</span>
+            <span style="--w:2.7%">Abuse 50</span>
+            <span style="--w:2.7%">Arrest 50</span>
+            <span style="--w:2.7%">Assault 50</span>
+            <span style="--w:2.7%">Explosion 50</span>
+            <span style="--w:2.7%">Fighting 50</span>
+            <span style="--w:2.7%">Shooting 50</span>
+            <span style="--w:2.7%">Shoplifting 50</span>
+            <span style="--w:2.7%">Vandalism 50</span>
+            <span style="--w:2.6%">Arson 49</span>
+          </div>
+        </div>
+
+        <div class="screenshot-panel">
+          <div>
+            <h3>UCF_Crime_Anomaly_Detection_Training Screenshots</h3>
+            <p>These are the exact embedded outputs extracted from the pasted training notebook.</p>
+          </div>
+          <div class="screenshot-grid training-screenshot-grid">
+            <figure>
+              <img src="/project-assets/training-notebook/training-progress.png" alt="Training progress from UCF-Crime notebook">
+              <figcaption>Training progress</figcaption>
+            </figure>
+            <figure>
+              <img src="/project-assets/training-notebook/test-set-evaluation.png" alt="Test set evaluation from UCF-Crime notebook">
+              <figcaption>Test set evaluation</figcaption>
+            </figure>
+            <figure>
+              <img src="/project-assets/training-notebook/per-category-accuracy.png" alt="Per-category accuracy from UCF-Crime notebook">
+              <figcaption>Per-category accuracy</figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+    </div>
 
     <main class="layout">
       <section class="camera-panel">
@@ -92,7 +196,48 @@
             <button type="submit">Analyze</button>
           </form>
         </div>
-        <div id="uploadResult" class="upload-result">Waiting for upload</div>
+        <div class="analysis-board">
+          <div class="workflow-header">
+            <div>
+              <h3>Analysis Workflow</h3>
+              <p id="analysisState">Waiting for upload</p>
+            </div>
+            <div class="analysis-timer">
+              <span>Elapsed</span>
+              <strong id="analysisTimer">00:00.0</strong>
+            </div>
+          </div>
+          <div id="analysisSteps" class="analysis-steps">
+            <div class="step-node pending" data-step="queued">
+              <span class="step-index">1</span>
+              <div><strong>File queued</strong><small>Ready to upload</small></div>
+            </div>
+            <div class="step-node pending" data-step="uploading">
+              <span class="step-index">2</span>
+              <div><strong>Uploading</strong><small>Sending video to runtime</small></div>
+            </div>
+            <div class="step-node pending" data-step="frames">
+              <span class="step-index">3</span>
+              <div><strong>Frames ready</strong><small>Reading FPS and duration</small></div>
+            </div>
+            <div class="step-node pending" data-step="features">
+              <span class="step-index">4</span>
+              <div><strong>Feature extracting</strong><small>Building VideoMAE clips</small></div>
+            </div>
+            <div class="step-node pending" data-step="scoring">
+              <span class="step-index">5</span>
+              <div><strong>Scoring</strong><small>Running anomaly model</small></div>
+            </div>
+            <div class="step-node pending" data-step="completed">
+              <span class="step-index">6</span>
+              <div><strong>Completed</strong><small>Metrics and timeline ready</small></div>
+            </div>
+          </div>
+        </div>
+        <div id="uploadResult" class="upload-result">Select an MP4 to begin</div>
+        <div id="visualSummary" class="visual-summary"></div>
+        <div id="analysisMetrics" class="analysis-metrics"></div>
+        <div id="frameGallery" class="frame-gallery"></div>
         <div id="timeline" class="timeline"></div>
       </section>
     </main>

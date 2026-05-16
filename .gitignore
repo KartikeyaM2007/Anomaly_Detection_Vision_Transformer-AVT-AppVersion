@@ -11,7 +11,11 @@ env/
 
 # Large local data/runtime noise
 data/
-artifacts/
+artifacts/*
+!artifacts/checkpoints/
+!artifacts/checkpoints/best_model.pt
+!artifacts/features/
+!artifacts/features/embeddings.npy
 data/UCF-Crime_dataset/venv/
 data/UCF-Crime_dataset/anaconda_projects/
 

@@ -1,5 +1,8 @@
 const els = {
   runtimeStatus: document.getElementById("runtimeStatus"),
+  infoBtn: document.getElementById("infoBtn"),
+  closeInfoBtn: document.getElementById("closeInfoBtn"),
+  infoModal: document.getElementById("infoModal"),
   cameraState: document.getElementById("cameraState"),
   startBtn: document.getElementById("startBtn"),
   stopBtn: document.getElementById("stopBtn"),
@@ -23,12 +26,32 @@ const els = {
   uploadForm: document.getElementById("uploadForm"),
   videoFile: document.getElementById("videoFile"),
   uploadResult: document.getElementById("uploadResult"),
+  analysisState: document.getElementById("analysisState"),
+  analysisTimer: document.getElementById("analysisTimer"),
+  analysisSteps: document.getElementById("analysisSteps"),
+  visualSummary: document.getElementById("visualSummary"),
+  analysisMetrics: document.getElementById("analysisMetrics"),
+  frameGallery: document.getElementById("frameGallery"),
   timeline: document.getElementById("timeline"),
 };
 
 let stream = null;
 let timer = null;
 let busy = false;
+let analysisStartedAt = null;
+let analysisTimerId = null;
+let workflowId = null;
+let activeStep = "queued";
+
+const stepOrder = ["queued", "uploading", "frames", "features", "scoring", "completed"];
+const stepLabels = {
+  queued: "File queued",
+  uploading: "Uploading video",
+  frames: "Preparing frames",
+  features: "Extracting features",
+  scoring: "Scoring anomaly timeline",
+  completed: "Analysis completed",
+};
 
 function pct(value) {
   return `${Math.round(value * 100)}%`;
@@ -36,6 +59,16 @@ function pct(value) {
 
 function pct1(value) {
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function fmtTime(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${String(mins).padStart(2, "0")}:${secs.toFixed(1).padStart(4, "0")}`;
+}
+
+function fmtSeconds(seconds) {
+  return `${Number(seconds || 0).toFixed(2)}s`;
 }
 
 async function api(path, options = {}) {
@@ -59,6 +92,18 @@ async function loadHealth() {
   if (health.error) {
     els.cameraState.textContent = health.error;
   }
+}
+
+function openInfoModal() {
+  els.infoModal.hidden = false;
+  document.body.classList.add("modal-open");
+  els.closeInfoBtn.focus();
+}
+
+function closeInfoModal() {
+  els.infoModal.hidden = true;
+  document.body.classList.remove("modal-open");
+  els.infoBtn.focus();
 }
 
 async function startCamera() {
@@ -139,6 +184,82 @@ function renderEvents(events) {
     .join("");
 }
 
+function resetWorkflow() {
+  stopWorkflowTimer();
+  activeStep = "queued";
+  els.analysisTimer.textContent = "00:00.0";
+  els.analysisState.textContent = "Waiting for upload";
+  els.visualSummary.innerHTML = "";
+  els.analysisMetrics.innerHTML = "";
+  els.frameGallery.innerHTML = "";
+  renderWorkflow();
+}
+
+function startWorkflow(file) {
+  stopWorkflowTimer();
+  analysisStartedAt = performance.now();
+  activeStep = "queued";
+  els.analysisState.textContent = `${file.name} queued`;
+  renderWorkflow();
+  analysisTimerId = setInterval(() => {
+    els.analysisTimer.textContent = fmtTime((performance.now() - analysisStartedAt) / 1000);
+  }, 100);
+  workflowId = setInterval(advanceWorkflowEstimate, 2600);
+}
+
+function stopWorkflowTimer() {
+  if (analysisTimerId) clearInterval(analysisTimerId);
+  if (workflowId) clearInterval(workflowId);
+  analysisTimerId = null;
+  workflowId = null;
+}
+
+function advanceWorkflowEstimate() {
+  const current = stepOrder.indexOf(activeStep);
+  if (current >= 1 && current < stepOrder.indexOf("scoring")) {
+    setWorkflowStep(stepOrder[current + 1], "running");
+  }
+}
+
+function setWorkflowStep(step, mode = "running", detail = "") {
+  activeStep = step;
+  els.analysisState.textContent = detail || stepLabels[step];
+  renderWorkflow(mode);
+}
+
+function completeWorkflow(data) {
+  stopWorkflowTimer();
+  if (analysisStartedAt) {
+    els.analysisTimer.textContent = fmtTime((performance.now() - analysisStartedAt) / 1000);
+  }
+  activeStep = "completed";
+  els.analysisState.textContent = `${data.filename || "Video"} analysis completed`;
+  renderWorkflow("complete");
+}
+
+function failWorkflow(message) {
+  stopWorkflowTimer();
+  els.analysisState.textContent = message;
+  renderWorkflow("failed");
+}
+
+function renderWorkflow(mode = "running") {
+  const activeIndex = stepOrder.indexOf(activeStep);
+  els.analysisSteps.querySelectorAll(".step-node").forEach((node) => {
+    const index = stepOrder.indexOf(node.dataset.step);
+    node.classList.remove("pending", "running", "done", "failed");
+    if (mode === "failed" && index === activeIndex) {
+      node.classList.add("failed");
+    } else if (index < activeIndex || mode === "complete") {
+      node.classList.add("done");
+    } else if (index === activeIndex) {
+      node.classList.add(mode === "complete" ? "done" : "running");
+    } else {
+      node.classList.add("pending");
+    }
+  });
+}
+
 async function reset() {
   await api("/api/reset", { method: "POST" });
   els.featureCount.textContent = "0";
@@ -153,24 +274,67 @@ async function analyzeVideo(event) {
   event.preventDefault();
   const file = els.videoFile.files[0];
   if (!file) return;
-  els.uploadResult.textContent = `Analyzing video on ${els.device.textContent || "runtime"}...`;
+  startWorkflow(file);
+  els.uploadResult.textContent = `Starting analysis on ${els.device.textContent || "runtime"}...`;
   els.timeline.innerHTML = "";
+  els.visualSummary.innerHTML = "";
+  els.analysisMetrics.innerHTML = "";
+  els.frameGallery.innerHTML = "";
 
   const form = new FormData();
   form.append("video", file);
   form.append("threshold", els.thresholdInput.value);
   try {
-    const data = await api("/api/analyze-video", { method: "POST", body: form });
+    const data = await uploadForAnalysis(form);
+    setWorkflowStep("completed", "complete");
+    completeWorkflow(data);
     renderUpload(data);
   } catch (err) {
+    failWorkflow(err.message);
     els.uploadResult.textContent = err.message;
   }
+}
+
+function uploadForAnalysis(form) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/analyze-video");
+    xhr.upload.addEventListener("loadstart", () => setWorkflowStep("uploading"));
+    xhr.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable) return;
+      const percent = Math.round((event.loaded / event.total) * 100);
+      setWorkflowStep("uploading", "running", `Uploading video: ${percent}%`);
+    });
+    xhr.upload.addEventListener("load", () => setWorkflowStep("frames", "running", "Upload complete, reading frames"));
+    xhr.addEventListener("readystatechange", () => {
+      if (xhr.readyState === XMLHttpRequest.HEADERS_RECEIVED) {
+        setWorkflowStep("scoring", "running", "Scoring result");
+      }
+    });
+    xhr.addEventListener("load", () => {
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText || "{}");
+      } catch (err) {
+        reject(new Error("Could not parse analysis response"));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data);
+      } else {
+        reject(new Error(data.error || "Request failed"));
+      }
+    });
+    xhr.addEventListener("error", () => reject(new Error("Upload failed")));
+    xhr.send(form);
+  });
 }
 
 function renderUpload(data) {
   const overall = data.operational || data.overall;
   const raw = data.overall;
   const peak = data.peak_segment;
+  const metrics = data.metrics || {};
   els.uploadResult.innerHTML = `
     <strong>${overall.prediction}</strong>
     <span>${pct1(overall.prob_anomaly)} threat probability</span>
@@ -179,6 +343,9 @@ function renderUpload(data) {
     <span>${data.clips} clips, ${data.duration.toFixed(1)}s</span>
     ${peak ? `<span>peak at ${peak.start}s-${peak.end}s</span>` : ""}
   `;
+  renderVisualSummary(data, overall, raw);
+  renderAnalysisMetrics(metrics, overall);
+  renderFrameGallery(data.frame_samples || []);
   const duration = Math.max(data.duration, 0.1);
   els.timeline.innerHTML = data.timeline
     .map((seg) => {
@@ -190,10 +357,143 @@ function renderUpload(data) {
     .join("");
 }
 
+function renderVisualSummary(data, overall, raw) {
+  const metrics = data.metrics || {};
+  const score = overall.prob_anomaly || 0;
+  const normal = raw.prob_normal || 0;
+  const threat = raw.prob_anomaly || 0;
+  const peak = data.peak_score || score;
+  const average = metrics.average_score || 0;
+  const coverage = metrics.anomaly_coverage || 0;
+  const threshold = metrics.threshold || Number(els.thresholdInput.value);
+  const chartBars = (data.timeline || [])
+    .slice(0, 80)
+    .map((segment) => {
+      const height = Math.max(8, Math.round(segment.prob_anomaly * 100));
+      const state = segment.prob_anomaly >= threshold ? "danger" : "clear";
+      return `<span class="${state}" style="height:${height}%;" title="${segment.start}s-${segment.end}s ${pct1(segment.prob_anomaly)}"></span>`;
+    })
+    .join("");
+
+  els.visualSummary.innerHTML = `
+    <section class="score-gauge" style="--score:${Math.round(score * 100)};">
+      <div class="gauge-ring">
+        <strong>${pct1(score)}</strong>
+        <span>${overall.prediction}</span>
+      </div>
+      <div class="gauge-copy">
+        <span>Operational score</span>
+        <strong>${overall.basis === "peak_segment" ? "Peak-driven" : "Whole-video"}</strong>
+      </div>
+    </section>
+    <section class="score-bars">
+      <div>
+        <span>Normal</span>
+        <strong>${pct1(normal)}</strong>
+        <i><b style="width:${Math.round(normal * 100)}%;"></b></i>
+      </div>
+      <div>
+        <span>Threat</span>
+        <strong>${pct1(threat)}</strong>
+        <i><b class="danger" style="width:${Math.round(threat * 100)}%;"></b></i>
+      </div>
+      <div>
+        <span>Peak</span>
+        <strong>${pct1(peak)}</strong>
+        <i><b class="danger" style="width:${Math.round(peak * 100)}%;"></b></i>
+      </div>
+    </section>
+    <section class="score-strip">
+      <div>
+        <span>Average score</span>
+        <strong>${pct1(average)}</strong>
+      </div>
+      <div>
+        <span>Coverage</span>
+        <strong>${pct1(coverage)}</strong>
+      </div>
+      <div>
+        <span>Threshold</span>
+        <strong>${pct1(threshold)}</strong>
+      </div>
+    </section>
+    <section class="score-chart" aria-label="Timeline score chart">${chartBars}</section>
+  `;
+}
+
+function renderAnalysisMetrics(metrics, overall) {
+  const phaseTimes = metrics.phase_times || {};
+  const rows = [
+    ["Duration", fmtSeconds(metrics.duration_seconds)],
+    ["Frames", metrics.frames ?? "--"],
+    ["FPS", metrics.fps ?? "--"],
+    ["Clips", metrics.clips ?? "--"],
+    ["Features", metrics.features ? `${metrics.features} x ${metrics.feature_dim}` : "--"],
+    ["Timeline Segments", metrics.timeline_segments ?? "--"],
+    ["Anomaly Coverage", pct1(metrics.anomaly_coverage || 0)],
+    ["Anomaly Time", fmtSeconds(metrics.anomaly_seconds)],
+    ["Average Score", pct1(metrics.average_score || 0)],
+    ["Peak Score", pct1(metrics.peak_score || overall.prob_anomaly)],
+    ["Processing Time", fmtSeconds(metrics.processing_seconds)],
+    ["Threshold", pct1(metrics.threshold || Number(els.thresholdInput.value))],
+  ];
+  const phases = [
+    ["Read Video", phaseTimes.read_video_seconds],
+    ["Feature Extract", phaseTimes.feature_extraction_seconds],
+    ["Model Scoring", phaseTimes.scoring_seconds],
+  ];
+  els.analysisMetrics.innerHTML = `
+    ${rows
+      .map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`)
+      .join("")}
+    <div class="phase-card">
+      <span>Step Timing</span>
+      ${phases.map(([label, value]) => `<small>${label}: ${fmtSeconds(value)}</small>`).join("")}
+    </div>
+  `;
+}
+
+function renderFrameGallery(samples) {
+  if (!samples.length) {
+    els.frameGallery.innerHTML = "";
+    return;
+  }
+  els.frameGallery.innerHTML = `
+    <div class="gallery-header">
+      <h3>Frame Examples</h3>
+      <p>Sampled frames with nearest timeline score</p>
+    </div>
+    <div class="frame-grid">
+      ${samples
+        .map(
+          (sample) => `
+            <figure class="${sample.prediction === "ANOMALY" ? "danger" : "clear"}">
+              <img src="${sample.image}" alt="Video frame at ${sample.time}s">
+              <figcaption>
+                <span>${sample.time.toFixed(2)}s</span>
+                <strong>${pct1(sample.score)}</strong>
+              </figcaption>
+            </figure>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
 els.startBtn.addEventListener("click", startCamera);
 els.stopBtn.addEventListener("click", stopCamera);
 els.resetBtn.addEventListener("click", reset);
+els.infoBtn.addEventListener("click", openInfoModal);
+els.closeInfoBtn.addEventListener("click", closeInfoModal);
+els.infoModal.addEventListener("click", (event) => {
+  if (event.target === els.infoModal) closeInfoModal();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !els.infoModal.hidden) closeInfoModal();
+});
 els.uploadForm.addEventListener("submit", analyzeVideo);
+els.videoFile.addEventListener("change", resetWorkflow);
 els.thresholdInput.addEventListener("input", () => {
   els.thresholdValue.textContent = pct(Number(els.thresholdInput.value));
 });
@@ -204,3 +504,4 @@ loadHealth().catch((err) => {
   els.runtimeStatus.textContent = err.message;
   els.runtimeStatus.className = "status bad";
 });
+resetWorkflow();

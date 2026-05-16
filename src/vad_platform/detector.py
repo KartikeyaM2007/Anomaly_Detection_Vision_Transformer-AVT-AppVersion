@@ -165,13 +165,17 @@ class ViolenceDetectionService:
         if not self._ensure_runtime():
             return self._not_ready()
 
+        started_at = time.perf_counter()
+        phase_times: dict[str, float] = {}
         suffix = Path(video_file.filename or "upload.mp4").suffix or ".mp4"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             video_path = Path(tmp.name)
             video_file.save(tmp)
 
         try:
+            read_started = time.perf_counter()
             frames, fps, duration = _read_video(video_path)
+            phase_times["read_video_seconds"] = round(time.perf_counter() - read_started, 3)
             clips = _build_clips(
                 frames,
                 clip_len=self.config.clip_len,
@@ -183,17 +187,25 @@ class ViolenceDetectionService:
 
             features = []
             clip_times = []
+            extract_started = time.perf_counter()
             for clip_frames, start_idx in clips:
                 features.append(self._runtime.extract_clip_feature(clip_frames))
                 clip_times.append(start_idx / max(fps, 1.0))
+            phase_times["feature_extraction_seconds"] = round(time.perf_counter() - extract_started, 3)
 
             feature_array = np.stack(features, axis=0)
             active_threshold = threshold if threshold is not None else self.config.threshold
+            scoring_started = time.perf_counter()
             overall = self._runtime.predict(feature_array, active_threshold)
             timeline = self._score_timeline(feature_array, clip_times, fps, duration, active_threshold)
+            phase_times["scoring_seconds"] = round(time.perf_counter() - scoring_started, 3)
             anomaly_segments = [s for s in timeline if s["prob_anomaly"] >= active_threshold]
             peak_segment = max(timeline, key=lambda s: s["prob_anomaly"], default=None)
             peak_score = max((s["prob_anomaly"] for s in timeline), default=overall["prob_anomaly"])
+            avg_score = float(np.mean([s["prob_anomaly"] for s in timeline])) if timeline else overall["prob_anomaly"]
+            anomaly_seconds = _segment_union_seconds(anomaly_segments)
+            coverage = anomaly_seconds / max(duration, 0.001)
+            frame_samples = _build_frame_samples(frames, fps, timeline, peak_segment)
             operational_score = max(overall["prob_anomaly"], peak_score)
             operational = {
                 "prob_anomaly": operational_score,
@@ -215,6 +227,24 @@ class ViolenceDetectionService:
                 "anomaly_segments": anomaly_segments,
                 "peak_score": peak_score,
                 "peak_segment": peak_segment,
+                "frame_samples": frame_samples,
+                "metrics": {
+                    "frames": len(frames),
+                    "fps": round(fps, 2),
+                    "duration_seconds": round(duration, 2),
+                    "clips": len(clips),
+                    "features": int(feature_array.shape[0]),
+                    "feature_dim": int(feature_array.shape[1]),
+                    "timeline_segments": len(timeline),
+                    "anomaly_segments": len(anomaly_segments),
+                    "anomaly_seconds": round(anomaly_seconds, 2),
+                    "anomaly_coverage": round(coverage, 4),
+                    "average_score": avg_score,
+                    "peak_score": peak_score,
+                    "threshold": active_threshold,
+                    "processing_seconds": round(time.perf_counter() - started_at, 3),
+                    "phase_times": phase_times,
+                },
             }
         finally:
             video_path.unlink(missing_ok=True)
@@ -447,3 +477,78 @@ def _build_clips(
         padded = frames + [frames[-1]] * max(0, clip_len - len(frames))
         clips.append((padded[:clip_len], 0))
     return clips
+
+
+def _segment_union_seconds(segments: list[dict[str, Any]]) -> float:
+    if not segments:
+        return 0.0
+
+    intervals = sorted((float(seg["start"]), float(seg["end"])) for seg in segments)
+    merged: list[list[float]] = []
+    for start, end in intervals:
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+    return sum(max(0.0, end - start) for start, end in merged)
+
+
+def _build_frame_samples(
+    frames: list[np.ndarray],
+    fps: float,
+    timeline: list[dict[str, Any]],
+    peak_segment: dict[str, Any] | None,
+    max_samples: int = 6,
+) -> list[dict[str, Any]]:
+    if not frames:
+        return []
+
+    duration = len(frames) / max(fps, 1.0)
+    candidate_times = [0.0, duration * 0.25, duration * 0.5, duration * 0.75]
+    if peak_segment:
+        candidate_times.insert(0, (float(peak_segment["start"]) + float(peak_segment["end"])) / 2.0)
+
+    top_segments = sorted(timeline, key=lambda seg: seg["prob_anomaly"], reverse=True)[:4]
+    candidate_times.extend((float(seg["start"]) + float(seg["end"])) / 2.0 for seg in top_segments)
+
+    samples = []
+    used_indices: set[int] = set()
+    for sample_time in candidate_times:
+        frame_index = min(len(frames) - 1, max(0, int(round(sample_time * max(fps, 1.0)))))
+        if frame_index in used_indices:
+            continue
+        used_indices.add(frame_index)
+        scored = _score_at_time(timeline, frame_index / max(fps, 1.0))
+        samples.append(
+            {
+                "time": round(frame_index / max(fps, 1.0), 2),
+                "score": scored["prob_anomaly"],
+                "prediction": scored["prediction"],
+                "image": _frame_to_data_url(frames[frame_index]),
+            }
+        )
+        if len(samples) >= max_samples:
+            break
+    return sorted(samples, key=lambda sample: sample["time"])
+
+
+def _score_at_time(timeline: list[dict[str, Any]], sample_time: float) -> dict[str, Any]:
+    if not timeline:
+        return {"prob_anomaly": 0.0, "prediction": "NORMAL"}
+
+    for segment in timeline:
+        if float(segment["start"]) <= sample_time <= float(segment["end"]):
+            return segment
+    return min(
+        timeline,
+        key=lambda seg: min(abs(sample_time - float(seg["start"])), abs(sample_time - float(seg["end"]))),
+    )
+
+
+def _frame_to_data_url(frame: np.ndarray) -> str:
+    image = Image.fromarray(frame)
+    image.thumbnail((360, 220))
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", quality=74, optimize=True)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"

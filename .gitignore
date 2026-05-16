@@ -14,10 +14,10 @@ data/
 artifacts/*
 !artifacts/checkpoints/
 !artifacts/checkpoints/best_model.pt
-!artifacts/features/
-!artifacts/features/embeddings.npy
-data/UCF-Crime_dataset/venv/
-data/UCF-Crime_dataset/anaconda_projects/
+
+# Ignore heavy embeddings to stay under Hugging Face 1GB limit
+artifacts/features/
+*.npy
 
 # Notebook/runtime cache files
 **/.ipynb_checkpoints/

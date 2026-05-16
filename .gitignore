@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local Python environments
+.venv/
+venv/
+env/
+
+# Large local data/runtime noise
+data/
+artifacts/
+data/UCF-Crime_dataset/venv/
+data/UCF-Crime_dataset/anaconda_projects/
+
+# Notebook/runtime cache files
+**/.ipynb_checkpoints/
+
+# Generated runtime files
+*.log

@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Optional SRU/SRU++ training dependencies.
+# On Windows these require MSVC Build Tools (`cl`) and a CUDA toolkit if you want
+# SRU CUDA kernels. The deployed Flask platform does not require these packages.
+sru~=3.0.0.dev6
+ninja>=1.11.1.1

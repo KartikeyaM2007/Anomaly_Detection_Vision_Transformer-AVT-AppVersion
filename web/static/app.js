@@ -21,6 +21,8 @@ const els = {
   clientGpu: document.getElementById("clientGpu"),
   clientCpu: document.getElementById("clientCpu"),
   clientMemory: document.getElementById("clientMemory"),
+  clientInferenceBtn: document.getElementById("clientInferenceBtn"),
+  clientInferenceStatus: document.getElementById("clientInferenceStatus"),
   thresholdInput: document.getElementById("thresholdInput"),
   thresholdValue: document.getElementById("thresholdValue"),
   liveThresholdInput: document.getElementById("liveThresholdInput"),
@@ -49,6 +51,7 @@ let workflowId = null;
 let activeStep = "queued";
 let terminalStartedAt = null;
 let activeEventSource = null;
+let clientClassifierSession = null;
 
 const stepOrder = ["queued", "uploading", "frames", "features", "scoring", "completed"];
 const stepLabels = {
@@ -151,6 +154,53 @@ function loadClientHardware() {
   els.clientMemory.textContent = navigator.deviceMemory
     ? `${navigator.deviceMemory} GB reported`
     : "Unavailable";
+}
+
+function softmax2(a, b) {
+  const max = Math.max(a, b);
+  const ea = Math.exp(a - max);
+  const eb = Math.exp(b - max);
+  const total = ea + eb;
+  return [ea / total, eb / total];
+}
+
+async function loadClientClassifier() {
+  if (window.avtBrowserInference) {
+    await window.avtBrowserInference.loadModels();
+    return;
+  }
+
+  if (!window.ort) {
+    els.clientInferenceStatus.textContent = "ONNX Runtime Web did not load. Check your network or content blocker.";
+    return;
+  }
+
+  const useWebGpu = Boolean(navigator.gpu);
+  const providers = useWebGpu ? ["webgpu", "wasm"] : ["wasm"];
+  els.clientInferenceBtn.disabled = true;
+  els.clientInferenceStatus.textContent = `Loading browser classifier with ${useWebGpu ? "WebGPU" : "WASM CPU"}...`;
+  appendTerminalLine(`[browser] loading anomaly_transformer.onnx via ${providers.join(" -> ")}`);
+
+  try {
+    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
+    clientClassifierSession = await ort.InferenceSession.create("/static/models/browser/anomaly_transformer.onnx", {
+      executionProviders: providers,
+    });
+    const features = new Float32Array(1 * 512 * 768);
+    const tensor = new ort.Tensor("float32", features, [1, 512, 768]);
+    const started = performance.now();
+    const outputs = await clientClassifierSession.run({ features: tensor });
+    const elapsed = performance.now() - started;
+    const logits = outputs.logits.data;
+    const [, threat] = softmax2(logits[0], logits[1]);
+    els.clientInferenceStatus.textContent = `Loaded locally on ${providers[0]}. Test inference ${elapsed.toFixed(1)} ms, synthetic threat ${(threat * 100).toFixed(1)}%.`;
+    appendTerminalLine(`[browser] classifier ready provider=${providers[0]} test_ms=${elapsed.toFixed(1)}`);
+  } catch (err) {
+    els.clientInferenceStatus.textContent = `Browser classifier failed: ${err.message}`;
+    appendTerminalLine(`[browser] classifier failed: ${err.message}`, "error");
+  } finally {
+    els.clientInferenceBtn.disabled = false;
+  }
 }
 
 function openInfoModal() {
@@ -599,6 +649,7 @@ els.startBtn.addEventListener("click", startCamera);
 els.stopBtn.addEventListener("click", stopCamera);
 els.resetBtn.addEventListener("click", reset);
 els.clearTerminalBtn.addEventListener("click", () => resetTerminal());
+els.clientInferenceBtn.addEventListener("click", loadClientClassifier);
 els.infoBtn.addEventListener("click", openInfoModal);
 els.closeInfoBtn.addEventListener("click", closeInfoModal);
 els.infoModal.addEventListener("click", (event) => {
@@ -621,3 +672,21 @@ loadHealth().catch((err) => {
 });
 loadClientHardware();
 resetWorkflow();
+
+window.avtApp = {
+  els,
+  appendTerminalLine,
+  completeWorkflow,
+  failWorkflow,
+  fmtSeconds,
+  pct,
+  pct1,
+  renderAnalysisMetrics,
+  renderFrameGallery,
+  renderUpload,
+  renderVisualSummary,
+  resetTerminal,
+  setWorkflowStep,
+  startWorkflow,
+  stopWorkflowTimer,
+};

@@ -82,6 +82,26 @@ Optional SRU/SRU++ training dependencies:
 pip install -r requirements-training.txt
 ```
 
+Optional browser export dependencies:
+
+```bash
+pip install -r requirements-export.txt
+python scripts/export/export_browser_models.py
+```
+
+Browser-side ONNX artifacts are stored under:
+
+```text
+web/static/models/browser/
+  manifest.json
+  videomae_feature_extractor.onnx
+  anomaly_transformer.onnx
+```
+
+The browser analyzer uses ONNX Runtime Web with WebGPU when available and falls
+back to WASM otherwise. The server analyzer remains available as the reliable
+fallback for browsers or devices that cannot load the larger client models.
+
 On Windows, SRU requires MSVC Build Tools (`cl`) and a CUDA toolkit for its JIT
 kernels. The deployed platform does not need SRU.
 

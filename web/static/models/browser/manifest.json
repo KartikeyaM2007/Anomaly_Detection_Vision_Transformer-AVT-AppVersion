@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "clipLen": 16,
+  "frameSkip": 2,
+  "clipStride": 8,
+  "featureDim": 768,
+  "maxFrames": 512,
+  "segmentClips": 4,
+  "imageSize": 224,
+  "imageMean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "imageStd": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "models": {
+    "anomalyClassifier": "anomaly_transformer.onnx",
+    "videomaeFeatureExtractor": "videomae_feature_extractor.onnx"
+  }
+}

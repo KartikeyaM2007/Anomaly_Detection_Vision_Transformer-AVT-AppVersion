@@ -24,3 +24,9 @@ artifacts/features/
 
 # Generated runtime files
 *.log
+
+# Desktop packaging outputs
+build/
+dist/
+release/
+installer_test/

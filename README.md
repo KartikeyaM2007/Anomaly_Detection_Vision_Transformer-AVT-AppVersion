@@ -70,6 +70,7 @@ python -m desktop_app.main
 ```
 
 See `docs/desktop-app.md` for desktop packaging and offline model notes.
+See `docs/windows-installer.md` for building a shareable `AVT-Setup.exe`.
 
 If your default `python` points to an environment without PySide6, run the app
 with the Python interpreter where desktop dependencies are installed. On the
@@ -258,6 +259,16 @@ UI_ANALYSIS_DONE ANOMALY 40 100
 TERMINAL_HAS_RUNTIME True
 TERMINAL_HAS_DONE True
 ```
+
+Build the Windows desktop bundle and installer:
+
+```powershell
+.\scripts\build_windows_installer.ps1
+```
+
+This produces `dist/AVT/AVT.exe` and, when Inno Setup is installed,
+`release/AVT-Setup.exe`. If Inno Setup is unavailable, the script creates
+`release/AVT-portable.zip` as a shareable fallback.
 
 ## API
 

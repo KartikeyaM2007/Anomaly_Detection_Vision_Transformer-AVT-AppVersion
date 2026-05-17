@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,10 +26,20 @@ class RuntimeConfig:
     live_segment_clips: int = 4
     use_amp: bool = False
     videomae_name: str = "MCG-NJU/videomae-base"
+    hf_local_files_only: bool = False
+    device_preference: str = "auto"
 
 
 def default_config(project_root: Path) -> RuntimeConfig:
     checkpoint = project_root / "artifacts" / "checkpoints" / "best_model.pt"
     if not checkpoint.exists():
         checkpoint = project_root / "data" / "UCF-Crime_dataset" / "best_model.pt"
-    return RuntimeConfig(checkpoint_path=checkpoint)
+    local_videomae = project_root / "artifacts" / "models" / "videomae-base"
+    offline_requested = os.environ.get("TRANSFORMERS_OFFLINE") == "1" or os.environ.get("HF_HUB_OFFLINE") == "1"
+    if local_videomae.exists():
+        return RuntimeConfig(
+            checkpoint_path=checkpoint,
+            videomae_name=str(local_videomae),
+            hf_local_files_only=True,
+        )
+    return RuntimeConfig(checkpoint_path=checkpoint, hf_local_files_only=offline_requested)

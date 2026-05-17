@@ -356,8 +356,9 @@ class _TorchRuntime:
         self.torch = torch
         self.F = F
         self.config = config
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
+        use_cuda = torch.cuda.is_available() and config.device_preference != "cpu"
+        self.device = torch.device("cuda" if use_cuda else "cpu")
+        self.device_name = torch.cuda.get_device_name(0) if use_cuda else "cpu"
         _progress(progress, f"[runtime] device={self.device_name}")
 
         _progress(progress, "[model] building AnomalyTransformer")
@@ -381,9 +382,15 @@ class _TorchRuntime:
         _progress(progress, f"[weights] loaded tensors={len(state_dict)}")
 
         _progress(progress, f"[videomae] loading processor {config.videomae_name}")
-        self.feature_extractor = AutoImageProcessor.from_pretrained(config.videomae_name)
+        self.feature_extractor = AutoImageProcessor.from_pretrained(
+            config.videomae_name,
+            local_files_only=config.hf_local_files_only,
+        )
         _progress(progress, f"[videomae] loading model {config.videomae_name}")
-        self.feature_model = VideoMAEModel.from_pretrained(config.videomae_name).to(self.device)
+        self.feature_model = VideoMAEModel.from_pretrained(
+            config.videomae_name,
+            local_files_only=config.hf_local_files_only,
+        ).to(self.device)
         self.feature_model.eval()
         if self.device.type == "cuda":
             torch.backends.cudnn.benchmark = True
@@ -564,7 +571,7 @@ def _build_frame_samples(
     fps: float,
     timeline: list[dict[str, Any]],
     peak_segment: dict[str, Any] | None,
-    max_samples: int = 6,
+    max_samples: int = 18,
     progress: ProgressCallback | None = None,
 ) -> list[dict[str, Any]]:
     if not frames:
@@ -575,7 +582,7 @@ def _build_frame_samples(
     if peak_segment:
         candidate_times.insert(0, (float(peak_segment["start"]) + float(peak_segment["end"])) / 2.0)
 
-    top_segments = sorted(timeline, key=lambda seg: seg["prob_anomaly"], reverse=True)[:4]
+    top_segments = sorted(timeline, key=lambda seg: seg["prob_anomaly"], reverse=True)[:12]
     candidate_times.extend((float(seg["start"]) + float(seg["end"])) / 2.0 for seg in top_segments)
 
     samples = []

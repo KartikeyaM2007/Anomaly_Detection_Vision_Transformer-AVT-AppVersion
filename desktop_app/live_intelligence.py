@@ -54,15 +54,22 @@ class LiveIntelligence:
         height, width = frame_rgb.shape[:2]
         frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        boxes = self._motion_boxes(frame_bgr)
+        motion_boxes = self._motion_boxes(frame_bgr)
+        boxes: list[tuple[int, int, int, int]] = []
         if self.frame_index % 8 == 1 and min(height, width) >= 240:
-            boxes = self._merge_boxes(boxes + self._hog_boxes(frame_bgr))
+            boxes.extend(self._hog_boxes(frame_bgr))
         faces = self._faces(gray)
-        boxes = self._merge_boxes(boxes + [self._expand_face_box(face, width, height) for face in faces])
+        boxes.extend([self._expand_face_box(face, width, height) for face in faces])
+        if not boxes and motion_boxes:
+            largest_motion = max(motion_boxes, key=lambda item: item[2] * item[3])
+            if largest_motion[2] * largest_motion[3] >= width * height * 0.12:
+                boxes.append(largest_motion)
+        boxes = self._merge_boxes(boxes)
         self._update_tracks(boxes, gray, now)
         self._expire_tracks(now)
 
-        motion_score = min(1.0, sum(track.motion for track in self.tracks.values()) / 240.0)
+        frame_motion = min(1.0, sum(w * h for _, _, w, h in motion_boxes) / max(width * height * 0.42, 1))
+        motion_score = max(frame_motion, min(1.0, sum(track.motion for track in self.tracks.values()) / 240.0))
         velocity_score = min(1.0, sum(track.velocity for track in self.tracks.values()) / 180.0)
         proximity_score = self._proximity_score()
         expression_score = max((self._emotion_risk(track.emotion) for track in self.tracks.values()), default=0.0)
@@ -111,6 +118,7 @@ class LiveIntelligence:
             },
             "instant_score": instant_score,
             "motion_score": motion_score,
+            "activity_regions": len(motion_boxes),
             "velocity_score": velocity_score,
             "proximity_score": proximity_score,
             "expression_score": expression_score,
@@ -216,7 +224,7 @@ class LiveIntelligence:
                     best_id = track_id
                     best_dist = dist
             if best_id is None:
-                label = f"Person {chr(64 + min(self.next_id, 26))}"
+                label = f"Person {self._person_letter(self.next_id)}"
                 self.tracks[self.next_id] = Track(self.next_id, label, box, centroid, now)
                 self.tracks[self.next_id].history.append(centroid)
                 assigned.add(self.next_id)
@@ -272,6 +280,14 @@ class LiveIntelligence:
 
     def _emotion_risk(self, emotion: str) -> float:
         return {"tense": 0.55, "focused": 0.25, "unknown": 0.15, "smiling": 0.0}.get(emotion, 0.15)
+
+    def _person_letter(self, index: int) -> str:
+        label = ""
+        while index > 0:
+            index -= 1
+            label = chr(65 + (index % 26)) + label
+            index //= 26
+        return label
 
     def _load_cascade(self, filename: str) -> cv2.CascadeClassifier:
         candidates = []

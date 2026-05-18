@@ -80,7 +80,10 @@ class MainWindow(QMainWindow):
         self.timeline_data: list[dict[str, Any]] = []
         self.score_history: list[float] = []
         self.live_metric_labels: dict[str, QLabel] = {}
+        self.theme_mode = "night"
         self.terminal_started_at: float | None = None
+        self.live_terminal_started_at: float | None = None
+        self.last_live_terminal_status = ""
         self.analysis_started_at: float | None = None
         self.analysis_timer = QTimer(self)
         self.analysis_timer.timeout.connect(self._tick_analysis_timer)
@@ -165,11 +168,15 @@ class MainWindow(QMainWindow):
         self.camera_button.clicked.connect(self._toggle_camera)
         self.info_button = QPushButton("Info")
         self.info_button.clicked.connect(self._show_info_dialog)
+        self.theme_button = QPushButton("Day")
+        self.theme_button.setToolTip("Switch between black/white night mode and white/black day mode.")
+        self.theme_button.clicked.connect(self._toggle_theme)
         controls.addWidget(self.upload_button)
         controls.addWidget(self.analyze_button)
         controls.addWidget(self.reset_button)
         controls.addWidget(self.camera_button)
         controls.addWidget(self.info_button)
+        controls.addWidget(self.theme_button)
         controls.addStretch(1)
         controls_widget = QWidget()
         controls_widget.setLayout(controls)
@@ -448,6 +455,11 @@ class MainWindow(QMainWindow):
         self.live_events = QListWidget()
         self.live_events.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         side_layout.addWidget(self._list_group("Alert Log", self.live_events), 1)
+        self.live_terminal = QTextEdit()
+        self.live_terminal.setObjectName("AnalysisTerminal")
+        self.live_terminal.setReadOnly(True)
+        self.live_terminal.setMinimumHeight(180)
+        side_layout.addWidget(self._terminal_group("Live Terminal", self.live_terminal))
         side_layout.addStretch(1)
         layout.addWidget(side_scroll, 1)
         self._reset_live_widgets()
@@ -540,63 +552,129 @@ class MainWindow(QMainWindow):
         layout.addWidget(widget)
         return group
 
+    def _terminal_group(self, title: str, widget: QTextEdit) -> QGroupBox:
+        group = QGroupBox(title)
+        layout = QVBoxLayout(group)
+        layout.addWidget(widget)
+        return group
+
     def _apply_theme(self) -> None:
+        colors = self._theme_colors()
         self.setStyleSheet(
-            """
-            QWidget { background: #000000; color: #e7e9ea; font-family: Segoe UI; font-size: 13px; }
-            #AppTitle { font-size: 28px; font-weight: 800; color: #ffffff; }
-            #Subtitle, #MutedHelp { color: #71767b; padding-left: 10px; }
-            QPushButton { background: #eff3f4; color: #0f1419; border: 0; border-radius: 8px; padding: 9px 14px; font-weight: 700; }
-            QPushButton:hover { background: #d7dbdc; }
-            QPushButton:disabled { background: #202327; color: #71767b; }
-            #InfoChip { background: #16181c; color: #e7e9ea; border: 1px solid #2f3336; border-radius: 14px; padding: 0; }
-            #FrameCard { background: #080808; border: 1px solid #2f3336; border-radius: 8px; }
-            #FrameCard[prediction="ANOMALY"] { border-color: #f4212e; }
-            #FrameCard[prediction="NORMAL"] { border-color: #00ba7c; }
-            #FrameImage { background: #000000; border-radius: 6px; }
-            #FrameMeta { color: #e7e9ea; font-weight: 800; }
-            #FrameSubtle { color: #71767b; }
-            QDoubleSpinBox, QComboBox { background: #000000; border: 1px solid #2f3336; border-radius: 8px; padding: 7px; min-width: 96px; color: #e7e9ea; }
-            QSlider::groove:horizontal { height: 5px; background: #2f3336; border-radius: 3px; }
-            QSlider::handle:horizontal { width: 18px; margin: -7px 0; border-radius: 9px; background: #ffffff; }
-            QSlider::sub-page:horizontal { background: #ffffff; border-radius: 3px; }
-            QProgressBar { background: #16181c; border: 1px solid #2f3336; border-radius: 7px; color: #ffffff; text-align: center; min-height: 18px; }
-            QProgressBar::chunk { background: #ffffff; border-radius: 6px; }
-            #AnomalyCoverageBar::chunk { background: #ffffff; border-radius: 6px; }
-            #VideoSurface { background: #000000; border: 1px solid #2f3336; border-radius: 8px; color: #71767b; font-size: 18px; }
-            #MetricCard { background: #080808; border: 1px solid #2f3336; border-radius: 8px; min-height: 82px; }
-            #MetricLabel { color: #71767b; font-size: 12px; }
-            #MetricValue { color: #ffffff; font-size: 16px; font-weight: 800; }
-            QGroupBox { border: 1px solid #2f3336; border-radius: 8px; margin-top: 12px; padding: 10px; font-weight: 800; }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: #e7e9ea; }
-            #PanelTitle { color: #ffffff; font-weight: 800; font-size: 15px; }
-            QTextEdit, QListWidget { background: #000000; border: 1px solid #2f3336; border-radius: 8px; color: #e7e9ea; }
-            #AnalysisTerminal { background: #000000; color: #e7e9ea; font-family: Consolas, Cascadia Mono, Courier New; font-size: 14px; }
-            #WorkflowState { color: #e7e9ea; font-weight: 800; }
-            #WorkflowTimer { color: #ffffff; font-size: 18px; font-weight: 900; }
-            #StepPending, #StepRunning, #StepDone, #StepFailed { border: 1px solid #2f3336; border-radius: 8px; padding: 4px; min-height: 106px; }
-            #StepPending { background: #080808; }
-            #StepRunning { background: #111111; border-color: #ffffff; }
-            #StepDone { background: #07170d; border-color: #00ba7c; }
-            #StepFailed { background: #210b0e; border-color: #f4212e; }
-            #StepBadge { background: #000000; border: 1px solid #2f3336; border-radius: 15px; min-width: 30px; max-width: 30px; min-height: 30px; qproperty-alignment: AlignCenter; font-weight: 900; color: #ffffff; }
-            #StepTitle { font-weight: 900; color: #ffffff; }
-            #StepDetail { color: #71767b; font-size: 11px; }
-            QTabWidget::pane { border: 0; }
-            QTabBar::tab { background: #000000; color: #71767b; padding: 9px 18px; border: 1px solid #2f3336; border-bottom: 0; border-top-left-radius: 6px; border-top-right-radius: 6px; }
-            QTabBar::tab:selected { background: #16181c; color: #ffffff; }
-            #LiveStatus { font-size: 24px; font-weight: 800; }
-            #LiveScore { font-size: 22px; font-weight: 800; color: #ffffff; }
-            QScrollBar:vertical { background: #000000; width: 12px; margin: 0; }
-            QScrollBar::handle:vertical { background: #2f3336; border-radius: 6px; min-height: 36px; }
-            QScrollBar::handle:vertical:hover { background: #71767b; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-            QScrollBar:horizontal { background: #000000; height: 12px; margin: 0; }
-            QScrollBar::handle:horizontal { background: #2f3336; border-radius: 6px; min-width: 36px; }
-            QScrollBar::handle:horizontal:hover { background: #71767b; }
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+            f"""
+            QWidget {{ background: {colors["bg"]}; color: {colors["text"]}; font-family: Segoe UI; font-size: 13px; }}
+            #AppTitle {{ font-size: 28px; font-weight: 800; color: {colors["strong"]}; }}
+            #Subtitle, #MutedHelp {{ color: {colors["muted"]}; padding-left: 10px; }}
+            QPushButton {{ background: {colors["button_bg"]}; color: {colors["button_text"]}; border: 0; border-radius: 8px; padding: 9px 14px; font-weight: 700; }}
+            QPushButton:hover {{ background: {colors["button_hover"]}; }}
+            QPushButton:disabled {{ background: {colors["disabled_bg"]}; color: {colors["muted"]}; }}
+            #InfoChip {{ background: {colors["panel"]}; color: {colors["text"]}; border: 1px solid {colors["border"]}; border-radius: 14px; padding: 0; }}
+            #FrameCard {{ background: {colors["card"]}; border: 1px solid {colors["border"]}; border-radius: 8px; }}
+            #FrameCard[prediction="ANOMALY"] {{ border-color: #f4212e; }}
+            #FrameCard[prediction="NORMAL"] {{ border-color: #00ba7c; }}
+            #FrameImage {{ background: {colors["bg"]}; border-radius: 6px; }}
+            #FrameMeta {{ color: {colors["strong"]}; font-weight: 800; }}
+            #FrameSubtle {{ color: {colors["muted"]}; }}
+            QDoubleSpinBox, QComboBox {{ background: {colors["bg"]}; border: 1px solid {colors["border"]}; border-radius: 8px; padding: 7px; min-width: 96px; color: {colors["text"]}; }}
+            QSlider::groove:horizontal {{ height: 5px; background: {colors["border"]}; border-radius: 3px; }}
+            QSlider::handle:horizontal {{ width: 18px; margin: -7px 0; border-radius: 9px; background: {colors["strong"]}; }}
+            QSlider::sub-page:horizontal {{ background: {colors["strong"]}; border-radius: 3px; }}
+            QProgressBar {{ background: {colors["panel"]}; border: 1px solid {colors["border"]}; border-radius: 7px; color: {colors["strong"]}; text-align: center; min-height: 18px; }}
+            QProgressBar::chunk {{ background: {colors["strong"]}; border-radius: 6px; }}
+            #AnomalyCoverageBar::chunk {{ background: {colors["strong"]}; border-radius: 6px; }}
+            #VideoSurface {{ background: {colors["bg"]}; border: 1px solid {colors["border"]}; border-radius: 8px; color: {colors["muted"]}; font-size: 18px; }}
+            #MetricCard {{ background: {colors["card"]}; border: 1px solid {colors["border"]}; border-radius: 8px; min-height: 82px; }}
+            #MetricLabel {{ color: {colors["muted"]}; font-size: 12px; }}
+            #MetricValue {{ color: {colors["strong"]}; font-size: 16px; font-weight: 800; }}
+            QGroupBox {{ border: 1px solid {colors["border"]}; border-radius: 8px; margin-top: 12px; padding: 10px; font-weight: 800; }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; color: {colors["text"]}; }}
+            #PanelTitle {{ color: {colors["strong"]}; font-weight: 800; font-size: 15px; }}
+            QTextEdit, QListWidget {{ background: {colors["bg"]}; border: 1px solid {colors["border"]}; border-radius: 8px; color: {colors["text"]}; }}
+            #AnalysisTerminal {{ background: {colors["bg"]}; color: {colors["text"]}; font-family: Consolas, Cascadia Mono, Courier New; font-size: 14px; }}
+            #WorkflowState {{ color: {colors["text"]}; font-weight: 800; }}
+            #WorkflowTimer {{ color: {colors["strong"]}; font-size: 18px; font-weight: 900; }}
+            #StepPending, #StepRunning, #StepDone, #StepFailed {{ border: 1px solid {colors["border"]}; border-radius: 8px; padding: 4px; min-height: 106px; }}
+            #StepPending {{ background: {colors["card"]}; }}
+            #StepRunning {{ background: {colors["panel"]}; border-color: {colors["strong"]}; }}
+            #StepDone {{ background: #07170d; border-color: #00ba7c; }}
+            #StepFailed {{ background: #210b0e; border-color: #f4212e; }}
+            #StepBadge {{ background: {colors["bg"]}; border: 1px solid {colors["border"]}; border-radius: 15px; min-width: 30px; max-width: 30px; min-height: 30px; qproperty-alignment: AlignCenter; font-weight: 900; color: {colors["strong"]}; }}
+            #StepTitle {{ font-weight: 900; color: {colors["strong"]}; }}
+            #StepDetail {{ color: {colors["muted"]}; font-size: 11px; }}
+            QTabWidget::pane {{ border: 0; }}
+            QTabBar::tab {{ background: {colors["bg"]}; color: {colors["muted"]}; padding: 9px 18px; border: 1px solid {colors["border"]}; border-bottom: 0; border-top-left-radius: 6px; border-top-right-radius: 6px; }}
+            QTabBar::tab:selected {{ background: {colors["panel"]}; color: {colors["strong"]}; }}
+            #LiveStatus {{ font-size: 24px; font-weight: 800; }}
+            #LiveScore {{ font-size: 22px; font-weight: 800; color: {colors["strong"]}; }}
+            QScrollBar:vertical {{ background: {colors["bg"]}; width: 12px; margin: 0; }}
+            QScrollBar::handle:vertical {{ background: {colors["border"]}; border-radius: 6px; min-height: 36px; }}
+            QScrollBar::handle:vertical:hover {{ background: {colors["muted"]}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QScrollBar:horizontal {{ background: {colors["bg"]}; height: 12px; margin: 0; }}
+            QScrollBar::handle:horizontal {{ background: {colors["border"]}; border-radius: 6px; min-width: 36px; }}
+            QScrollBar::handle:horizontal:hover {{ background: {colors["muted"]}; }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
             """
         )
+        if hasattr(self, "theme_button"):
+            self.theme_button.setText("Night" if self.theme_mode == "day" else "Day")
+        self._apply_plot_theme()
+
+    def _theme_colors(self) -> dict[str, str]:
+        if self.theme_mode == "day":
+            return {
+                "bg": "#ffffff",
+                "card": "#f7f9f9",
+                "panel": "#eff3f4",
+                "border": "#d7dbdc",
+                "text": "#0f1419",
+                "strong": "#000000",
+                "muted": "#536471",
+                "button_bg": "#0f1419",
+                "button_text": "#ffffff",
+                "button_hover": "#272c30",
+                "disabled_bg": "#d7dbdc",
+            }
+        return {
+            "bg": "#000000",
+            "card": "#080808",
+            "panel": "#16181c",
+            "border": "#2f3336",
+            "text": "#e7e9ea",
+            "strong": "#ffffff",
+            "muted": "#71767b",
+            "button_bg": "#eff3f4",
+            "button_text": "#0f1419",
+            "button_hover": "#d7dbdc",
+            "disabled_bg": "#202327",
+        }
+
+    def _toggle_theme(self) -> None:
+        self.theme_mode = "day" if self.theme_mode == "night" else "night"
+        self._apply_theme()
+        if self.timeline_data:
+            self._draw_timeline(self.timeline_data, float(self.threshold_input.value()))
+            self._draw_worm(self.timeline_data)
+        self._update_live_plot()
+        self.status.showMessage(f"{self.theme_mode.title()} theme enabled")
+
+    def _apply_plot_theme(self) -> None:
+        colors = self._theme_colors()
+        for attr in ("timeline_plot", "worm_plot", "score_plot", "event_plot", "live_plot"):
+            plot = getattr(self, attr, None)
+            if plot is None:
+                continue
+            plot.setBackground(colors["bg"])
+            for axis_name in ("left", "bottom"):
+                axis = plot.getAxis(axis_name)
+                axis.setPen(pg.mkPen(colors["border"]))
+                axis.setTextPen(pg.mkPen(colors["muted"]))
+
+    def _plot_line_color(self) -> str:
+        return "#000000" if self.theme_mode == "day" else "#ffffff"
+
+    def _plot_fill_brush(self) -> tuple[int, int, int, int]:
+        return (0, 0, 0, 22) if self.theme_mode == "day" else (255, 255, 255, 28)
 
     def _refresh_device_status(self) -> None:
         try:
@@ -692,6 +770,25 @@ class MainWindow(QMainWindow):
         self.terminal_output.append(f"[{self._terminal_time()}] {prefix} {message}")
         self.terminal_output.verticalScrollBar().setValue(self.terminal_output.verticalScrollBar().maximum())
 
+    def _reset_live_terminal(self) -> None:
+        self.live_terminal_started_at = time.perf_counter()
+        self.last_live_terminal_status = ""
+        if hasattr(self, "live_terminal"):
+            self.live_terminal.setPlainText("PS avt-live> waiting for camera and loaded model...")
+
+    def _live_terminal_time(self) -> str:
+        if self.live_terminal_started_at is None:
+            return "00:00.000"
+        elapsed = max(0.0, time.perf_counter() - self.live_terminal_started_at)
+        return f"{int(elapsed // 60):02d}:{int(elapsed % 60):02d}.{int((elapsed - int(elapsed)) * 1000):03d}"
+
+    def _append_live_terminal(self, message: str, level: str = "info") -> None:
+        if not hasattr(self, "live_terminal"):
+            return
+        prefix = "ERR" if level == "error" else "OK " if level == "complete" else "   "
+        self.live_terminal.append(f"[{self._live_terminal_time()}] {prefix} {message}")
+        self.live_terminal.verticalScrollBar().setValue(self.live_terminal.verticalScrollBar().maximum())
+
     def _set_workflow_step(self, step: str, detail: str = "", failed: bool = False) -> None:
         if step in self.workflow_order:
             self.workflow_index = self.workflow_order.index(step)
@@ -784,6 +881,7 @@ class MainWindow(QMainWindow):
         self.model_progress_timer.stop()
         self.model_progress.setValue(100)
         self._append_terminal("[runtime] ready", "complete")
+        self._append_live_terminal(f"model ready on {health.get('device') or 'device'}", "complete")
         self._set_metric("device", str(health.get("device") or "ready"))
         self.status.showMessage("Model runtime loaded")
 
@@ -972,7 +1070,7 @@ class MainWindow(QMainWindow):
         normal_y = [score for score in y if score < threshold]
         anomaly_x = [point for point, score in zip(x, y) if score >= threshold]
         anomaly_y = [score for score in y if score >= threshold]
-        self.timeline_plot.plot(x, y, pen=pg.mkPen("#ffffff", width=2))
+        self.timeline_plot.plot(x, y, pen=pg.mkPen(self._plot_line_color(), width=2))
         if normal_x:
             self.timeline_plot.plot(normal_x, normal_y, pen=None, symbol="o", symbolBrush="#00ba7c", symbolPen="#00ba7c", symbolSize=8)
         if anomaly_x:
@@ -990,7 +1088,7 @@ class MainWindow(QMainWindow):
         y = _moving_average(raw, window=4)
         x = list(range(1, len(y) + 1))
         threshold = float(self.threshold_input.value())
-        self.worm_plot.plot(x, y, pen=pg.mkPen("#ffffff", width=2), fillLevel=0, brush=(255, 255, 255, 28))
+        self.worm_plot.plot(x, y, pen=pg.mkPen(self._plot_line_color(), width=2), fillLevel=0, brush=self._plot_fill_brush())
         normal_x = [point for point, score in zip(x, raw) if score < threshold]
         normal_y = [score for score, raw_score in zip(y, raw) if raw_score < threshold]
         anomaly_x = [point for point, score in zip(x, raw) if score >= threshold]
@@ -1089,7 +1187,7 @@ class MainWindow(QMainWindow):
         brushes = [_status_brush(score, threshold, alpha=150) for score in scores]
         bar = pg.BarGraphItem(x=x, height=scores, width=0.46, brushes=brushes)
         self.event_plot.addItem(bar)
-        self.event_plot.plot(x, scores, pen=pg.mkPen("#ffffff", width=1))
+        self.event_plot.plot(x, scores, pen=pg.mkPen(self._plot_line_color(), width=1))
         self.event_plot.addLine(y=threshold, pen=pg.mkPen("#71767b", width=1, style=Qt.DashLine))
         self.event_plot.setYRange(0, 1, padding=0)
         self.event_plot.setXRange(0, max(1, len(timeline) - 1), padding=0.02)
@@ -1111,7 +1209,7 @@ class MainWindow(QMainWindow):
         axis = self.score_plot.getAxis("bottom")
         axis.setTicks([list(enumerate(labels))])
         for index, value in enumerate(values):
-            text = pg.TextItem(f"{value * 100:.1f}%", color="#ffffff", anchor=(0.5, 1.2))
+            text = pg.TextItem(f"{value * 100:.1f}%", color=self._plot_line_color(), anchor=(0.5, 1.2))
             text.setPos(index, value)
             self.score_plot.addItem(text)
         self.score_plot.addLine(y=threshold, pen=pg.mkPen("#71767b", width=1, style=Qt.DashLine))
@@ -1145,13 +1243,29 @@ class MainWindow(QMainWindow):
             if self.camera_worker:
                 self.camera_worker.stop()
             return
+        if getattr(self.service, "_runtime", None) is None:
+            self._reset_live_terminal()
+            self._append_live_terminal("load the model first; live anomaly scoring uses the trained VideoMAE + Transformer model", "error")
+            self.live_status.setText("Status: load model first")
+            self.live_score.setText("Score: model required")
+            self.live_events.clear()
+            self.live_events.addItem("Click Load Model before starting live anomaly detection.")
+            QMessageBox.information(
+                self,
+                "Load model first",
+                "Live anomaly detection uses the trained VideoMAE + Transformer model. Click Load Model first, then start the camera.",
+            )
+            return
         self.camera_button.setText("Stop Camera")
         self.score_history.clear()
         self.live_events.clear()
-        self.live_events.addItem("Warming up live model...")
+        self.live_events.addItem("Warming up trained live model...")
         self.live_status.setText("Status: starting")
         self.live_score.setText("Score: --")
         self._set_live_metric("threshold", f"{float(self.threshold_input.value()):.2f}")
+        self._reset_live_terminal()
+        self._append_live_terminal("$ avt-live camera --model videomae-transformer")
+        self._append_live_terminal("trained model is loaded; collecting sliding window frames")
         self._append_terminal("[runtime] live camera starting")
         self.camera_thread = QThread(self)
         self.camera_worker = CameraWorker(
@@ -1291,7 +1405,9 @@ class MainWindow(QMainWindow):
         status = payload.get("status", "scored")
         if status == "warming":
             needed = int(payload.get("needed_frames", 0))
-            self.live_status.setText(f"Status: warming ({needed} frames)")
+            self.live_status.setText(f"Status: model warming ({needed} frames)")
+        elif status == "model_required":
+            self.live_status.setText("Status: load model first")
         else:
             self.live_status.setText(f"Status: {prediction}")
         self.live_score.setText(f"Score: {score * 100:.1f}%")
@@ -1308,6 +1424,17 @@ class MainWindow(QMainWindow):
         self._set_live_metric("motion", f"{float(payload.get('motion_score', 0.0)) * 100:.0f}%")
         self._set_live_metric("model", str(payload.get("model_status", "waiting")))
         self._update_live_people(payload.get("people") or [])
+        terminal_status = (
+            f"{status}|{prediction}|{float(score):.3f}|{payload.get('model_status')}|"
+            f"{payload.get('person_count')}|{payload.get('activity_regions')}"
+        )
+        if terminal_status != self.last_live_terminal_status:
+            self.last_live_terminal_status = terminal_status
+            self._append_live_terminal(
+                f"model={payload.get('model_status')} status={status} prediction={prediction} "
+                f"score={score * 100:.1f}% fast={float(payload.get('fast_score', 0.0)) * 100:.1f}% "
+                f"people={payload.get('person_count', 0)} motion={float(payload.get('motion_score', 0.0)) * 100:.0f}%"
+            )
         self.score_history = (self.score_history + [score])[-120:]
         self._update_live_plot()
         self.live_events.clear()
@@ -1323,6 +1450,7 @@ class MainWindow(QMainWindow):
     def _live_failed(self, error: str) -> None:
         self.status.showMessage(error)
         self.live_status.setText("Status: error")
+        self._append_live_terminal(error, "error")
         self._append_terminal(f"[runtime] live error={error}")
 
     @Slot()
@@ -1330,6 +1458,7 @@ class MainWindow(QMainWindow):
         self.service.reset()
         self.score_history.clear()
         self._reset_live_widgets()
+        self._append_live_terminal("live buffers reset")
         self._append_terminal("[runtime] live buffers reset")
 
     @Slot()
@@ -1339,6 +1468,7 @@ class MainWindow(QMainWindow):
         self.camera_button.setEnabled(True)
         self.camera_button.setText("Start Camera")
         self.live_status.setText("Status: idle")
+        self._append_live_terminal("live camera stopped", "complete")
         self._append_terminal("[runtime] live camera stopped")
 
     def _reset_live_widgets(self) -> None:
@@ -1352,6 +1482,7 @@ class MainWindow(QMainWindow):
         self.live_features.setText("Feature history: 0")
         self.live_people.clear()
         self.live_people.addItem("No tracked people")
+        self._reset_live_terminal()
         for key, value in {
             "cam_fps": "--",
             "ai_fps": "--",
@@ -1394,7 +1525,7 @@ class MainWindow(QMainWindow):
         self.live_plot.addLine(y=threshold, pen=pg.mkPen("#71767b", width=1, style=Qt.DashLine))
         if self.score_history:
             xs = list(range(len(self.score_history)))
-            self.live_plot.plot(xs, self.score_history, pen=pg.mkPen("#ffffff", width=2))
+            self.live_plot.plot(xs, self.score_history, pen=pg.mkPen(self._plot_line_color(), width=2))
             normal_x = [x for x, score in zip(xs, self.score_history) if score < threshold]
             normal_y = [score for score in self.score_history if score < threshold]
             anomaly_x = [x for x, score in zip(xs, self.score_history) if score >= threshold]

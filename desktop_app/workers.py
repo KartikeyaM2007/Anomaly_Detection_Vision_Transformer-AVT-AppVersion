@@ -92,7 +92,7 @@ class CameraWorker(QObject):
             self.stopped.emit()
             return
 
-        last_heavy_score_at = 0.0
+        last_model_score_at = 0.0
         frame_count = 0
         score_count = 0
         last_result: dict[str, Any] | None = None
@@ -113,13 +113,9 @@ class CameraWorker(QObject):
                 result = self.fast_live.analyze(frame_rgb, self.threshold)
                 instant_score = float((result.get("result") or {}).get("prob_anomaly", 0.0))
                 runtime_ready = getattr(self.service, "_runtime", None) is not None
-                should_confirm = (
-                    runtime_ready
-                    and now - last_heavy_score_at >= 1.6
-                    and (instant_score >= min(0.18, self.threshold) or last_model_result is None)
-                )
-                if should_confirm:
-                    last_heavy_score_at = now
+                should_score_model = runtime_ready and now - last_model_score_at >= 0.25
+                if should_score_model:
+                    last_model_score_at = now
                     model_result = self.service.process_live_array(
                         frame_rgb,
                         threshold=self.threshold,
@@ -149,20 +145,43 @@ class CameraWorker(QObject):
     def _combine_live_results(self, fast_result: dict[str, Any], model_payload: dict[str, Any] | None) -> dict[str, Any]:
         combined = dict(fast_result)
         runtime_ready = getattr(self.service, "_runtime", None) is not None
-        combined["model_status"] = (model_payload or {}).get("status", "ready" if runtime_ready else "not loaded")
+        combined["model_status"] = (model_payload or {}).get("status", "ready" if runtime_ready else "load required")
         combined["model_feature_count"] = (model_payload or {}).get("feature_count", 0)
         combined["events"] = list((model_payload or {}).get("events") or [])
         fast_prediction = dict(combined.get("result") or {})
         model_result = (model_payload or {}).get("result") or {}
+        model_status = (model_payload or {}).get("status", "")
         model_score = float(model_result.get("prob_anomaly", 0.0))
         fast_score = float(fast_prediction.get("prob_anomaly", 0.0))
-        if model_score > 0:
-            score = max(fast_score, model_score)
-            fast_prediction["prob_anomaly"] = score
-            fast_prediction["prob_normal"] = 1.0 - score
-            fast_prediction["confidence"] = max(score, 1.0 - score)
-            fast_prediction["prediction"] = "ANOMALY" if score >= self.threshold else "NORMAL"
-            fast_prediction["basis"] = "fast+videomae"
-        combined["result"] = fast_prediction
+        combined["fast_score"] = fast_score
+        if not runtime_ready:
+            combined["status"] = "model_required"
+            combined["result"] = {
+                "prob_anomaly": 0.0,
+                "prob_normal": 1.0,
+                "confidence": 0.0,
+                "prediction": "LOAD MODEL",
+                "basis": "model_required",
+            }
+        elif model_status in {"warming", ""} and not model_result:
+            combined["status"] = "warming"
+            combined["needed_frames"] = (model_payload or {}).get("needed_frames", 0)
+            combined["result"] = {
+                "prob_anomaly": 0.0,
+                "prob_normal": 1.0,
+                "confidence": 0.0,
+                "prediction": "WARMING",
+                "basis": "model_warmup",
+            }
+        else:
+            combined["status"] = model_status or "scored"
+            combined["result"] = {
+                "prob_anomaly": model_score,
+                "prob_normal": float(model_result.get("prob_normal", 1.0 - model_score)),
+                "confidence": float(model_result.get("confidence", max(model_score, 1.0 - model_score))),
+                "prediction": model_result.get("prediction", "ANOMALY" if model_score >= self.threshold else "NORMAL"),
+                "basis": model_result.get("basis", "videomae_transformer"),
+                "fast_score": fast_score,
+            }
         combined["feature_count"] = combined.get("person_count", 0)
         return combined

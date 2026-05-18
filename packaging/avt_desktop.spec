@@ -20,6 +20,8 @@ if local_videomae.exists():
 for package_name in ("transformers", "torchvision", "sklearn"):
     datas += collect_data_files(package_name)
 
+datas += collect_data_files("cv2", includes=["data/*.xml"])
+
 hiddenimports = []
 for package_name in (
     "desktop_app",

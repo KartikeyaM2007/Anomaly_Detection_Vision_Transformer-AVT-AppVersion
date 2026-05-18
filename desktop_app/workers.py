@@ -7,6 +7,7 @@ from typing import Any
 import cv2
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+from desktop_app.live_intelligence import LiveIntelligence
 from vad_platform.detector import ViolenceDetectionService
 
 
@@ -80,6 +81,7 @@ class CameraWorker(QObject):
         self.camera_index = camera_index
         self.focus_screen = focus_screen
         self._running = False
+        self.fast_live = LiveIntelligence()
 
     @Slot()
     def run(self) -> None:
@@ -90,10 +92,11 @@ class CameraWorker(QObject):
             self.stopped.emit()
             return
 
-        last_score_at = 0.0
+        last_heavy_score_at = 0.0
         frame_count = 0
         score_count = 0
         last_result: dict[str, Any] | None = None
+        last_model_result: dict[str, Any] | None = None
         started_at = time.perf_counter()
         try:
             while self._running:
@@ -106,23 +109,32 @@ class CameraWorker(QObject):
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
                 now = time.perf_counter()
-                # Score at a controlled cadence to keep UI latency low.
-                if now - last_score_at >= 0.25:
-                    last_score_at = now
-                    infer_started = time.perf_counter()
-                    result = self.service.process_live_array(
+                infer_started = time.perf_counter()
+                result = self.fast_live.analyze(frame_rgb, self.threshold)
+                instant_score = float((result.get("result") or {}).get("prob_anomaly", 0.0))
+                runtime_ready = getattr(self.service, "_runtime", None) is not None
+                should_confirm = (
+                    runtime_ready
+                    and now - last_heavy_score_at >= 1.6
+                    and (instant_score >= min(0.18, self.threshold) or last_model_result is None)
+                )
+                if should_confirm:
+                    last_heavy_score_at = now
+                    model_result = self.service.process_live_array(
                         frame_rgb,
                         threshold=self.threshold,
                         request_focus_screen=self.focus_screen,
                     )
-                    score_count += 1
-                    elapsed = max(time.perf_counter() - started_at, 0.001)
-                    result["latency_ms"] = (time.perf_counter() - infer_started) * 1000.0
-                    result["camera_fps"] = frame_count / elapsed
-                    result["processed_fps"] = score_count / elapsed
-                    last_result = result
-                    self.result_ready.emit(result)
-                self.frame_ready.emit(_draw_live_overlay(frame_rgb, last_result))
+                    last_model_result = model_result
+                result = self._combine_live_results(result, last_model_result)
+                score_count += 1
+                elapsed = max(time.perf_counter() - started_at, 0.001)
+                result["latency_ms"] = (time.perf_counter() - infer_started) * 1000.0
+                result["camera_fps"] = frame_count / elapsed
+                result["processed_fps"] = score_count / elapsed
+                last_result = result
+                self.result_ready.emit(result)
+                self.frame_ready.emit(self.fast_live.draw_overlay(frame_rgb, last_result))
                 QThread.msleep(1)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -134,29 +146,23 @@ class CameraWorker(QObject):
     def stop(self) -> None:
         self._running = False
 
-
-def _draw_live_overlay(frame_rgb: Any, payload: dict[str, Any] | None) -> Any:
-    if payload is None:
-        return frame_rgb
-    frame = frame_rgb.copy()
-    result = payload.get("result") or payload
-    prediction = str(result.get("prediction") or payload.get("status") or "warming").upper()
-    score = float(result.get("prob_anomaly", 0.0))
-    color = (244, 33, 46) if prediction == "ANOMALY" else (0, 186, 124)
-    if payload.get("status") == "warming":
-        color = (231, 233, 234)
-    text = f"{prediction}  {score * 100:.1f}%"
-    cv2.rectangle(frame, (12, 12), (min(frame.shape[1] - 12, 390), 78), (0, 0, 0), -1)
-    cv2.rectangle(frame, (12, 12), (min(frame.shape[1] - 12, 390), 78), color, 2)
-    cv2.putText(frame, text, (24, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
-    cv2.putText(
-        frame,
-        f"cam {float(payload.get('camera_fps', 0.0)):.1f} fps | ai {float(payload.get('processed_fps', 0.0)):.1f} fps",
-        (24, 68),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.45,
-        (231, 233, 234),
-        1,
-        cv2.LINE_AA,
-    )
-    return frame
+    def _combine_live_results(self, fast_result: dict[str, Any], model_payload: dict[str, Any] | None) -> dict[str, Any]:
+        combined = dict(fast_result)
+        runtime_ready = getattr(self.service, "_runtime", None) is not None
+        combined["model_status"] = (model_payload or {}).get("status", "ready" if runtime_ready else "not loaded")
+        combined["model_feature_count"] = (model_payload or {}).get("feature_count", 0)
+        combined["events"] = list((model_payload or {}).get("events") or [])
+        fast_prediction = dict(combined.get("result") or {})
+        model_result = (model_payload or {}).get("result") or {}
+        model_score = float(model_result.get("prob_anomaly", 0.0))
+        fast_score = float(fast_prediction.get("prob_anomaly", 0.0))
+        if model_score > 0:
+            score = max(fast_score, model_score)
+            fast_prediction["prob_anomaly"] = score
+            fast_prediction["prob_normal"] = 1.0 - score
+            fast_prediction["confidence"] = max(score, 1.0 - score)
+            fast_prediction["prediction"] = "ANOMALY" if score >= self.threshold else "NORMAL"
+            fast_prediction["basis"] = "fast+videomae"
+        combined["result"] = fast_prediction
+        combined["feature_count"] = combined.get("person_count", 0)
+        return combined

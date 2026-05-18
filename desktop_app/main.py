@@ -22,11 +22,6 @@ if str(SRC) not in sys.path:
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
-from PySide6.QtWidgets import QApplication
-
-from desktop_app.ui.main_window import MainWindow
-
-
 def _smoke_load_model() -> int:
     from vad_platform.config import default_config
     from vad_platform.detector import ViolenceDetectionService
@@ -57,6 +52,7 @@ def _smoke_load_model() -> int:
 def _smoke_live_model() -> int:
     import numpy as np
 
+    from desktop_app.live_intelligence import LiveIntelligence
     from vad_platform.config import default_config
     from vad_platform.detector import ViolenceDetectionService
 
@@ -70,7 +66,12 @@ def _smoke_live_model() -> int:
             handle.write(message + "\n")
 
     service = ViolenceDetectionService(ROOT, default_config(ROOT))
+    if not service._ensure_runtime(progress=emit):
+        emit(f"SMOKE_LIVE_MODEL_FAILED {service._runtime_error}")
+        return 1
+    fast_live = LiveIntelligence()
     last = {}
+    fast_last = {}
     try:
         for index in range(20):
             frame = np.zeros((160, 160, 3), dtype=np.uint8)
@@ -78,6 +79,7 @@ def _smoke_live_model() -> int:
             frame[:, :, 1] = 80
             frame[:, :, 2] = 120
             frame[40:120, 50 + (index % 8) : 90 + (index % 8), :] = 220
+            fast_last = fast_live.analyze(frame, threshold=0.25)
             last = service.process_live_array(frame, threshold=0.25)
     except Exception as exc:
         emit(f"SMOKE_LIVE_MODEL_FAILED {exc}")
@@ -89,8 +91,13 @@ def _smoke_live_model() -> int:
     result = last.get("result") or {}
     emit(f"SMOKE_LIVE_PREDICTION {result.get('prediction')}")
     emit(f"SMOKE_LIVE_SCORE {float(result.get('prob_anomaly', 0.0)):.4f}")
+    emit(f"SMOKE_FAST_PEOPLE {fast_last.get('person_count')}")
+    emit(f"SMOKE_FAST_SCORE {float((fast_last.get('result') or {}).get('prob_anomaly', 0.0)):.4f}")
     if not last.get("ready") or last.get("status") != "scored":
         emit("SMOKE_LIVE_MODEL_FAILED not-scored")
+        return 1
+    if int(fast_last.get("person_count") or 0) < 1:
+        emit("SMOKE_LIVE_MODEL_FAILED no-fast-people")
         return 1
     emit(f"SMOKE_LIVE_MODEL_OK {service._runtime.device_name if service._runtime else 'unknown'}")
     return 0
@@ -101,6 +108,10 @@ def main() -> int:
         return _smoke_load_model()
     if "--smoke-live-model" in sys.argv:
         return _smoke_live_model()
+
+    from PySide6.QtWidgets import QApplication
+
+    from desktop_app.ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
     app.setApplicationName("AnomalyGuard")

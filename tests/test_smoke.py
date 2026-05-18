@@ -115,6 +115,25 @@ class PlatformSmokeTests(unittest.TestCase):
         self.assertEqual(scored["result"]["prediction"], "ANOMALY")
         self.assertEqual(scored["feature_count"], 1)
 
+    def test_fast_live_intelligence_tracks_people(self):
+        import numpy as np
+
+        from desktop_app.live_intelligence import LiveIntelligence
+
+        live = LiveIntelligence()
+        result = {}
+        for index in range(10):
+            frame = np.zeros((180, 240, 3), dtype=np.uint8)
+            x = 40 + index * 6
+            frame[40:150, x : x + 45, :] = 210
+            result = live.analyze(frame, threshold=0.12)
+
+        self.assertTrue(result["ready"])
+        self.assertGreaterEqual(result["person_count"], 1)
+        self.assertIn("people", result)
+        self.assertIn("prob_anomaly", result["result"])
+        self.assertTrue(any(str(person["label"]).startswith("Person ") for person in result["people"]))
+
 
 if __name__ == "__main__":
     unittest.main()

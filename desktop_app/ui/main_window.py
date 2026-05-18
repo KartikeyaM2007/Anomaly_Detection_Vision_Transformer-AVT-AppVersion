@@ -375,9 +375,14 @@ class MainWindow(QMainWindow):
         self.live_video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.live_video_label, 2)
 
+        side_scroll = QScrollArea()
+        side_scroll.setWidgetResizable(True)
+        side_scroll.setFrameShape(QFrame.NoFrame)
+        side_scroll.setMinimumWidth(420)
         side = QWidget()
+        side_scroll.setWidget(side)
         side_layout = QVBoxLayout(side)
-        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.setContentsMargins(0, 0, 8, 0)
         side_layout.setSpacing(10)
         self.live_status = QLabel("Status: idle")
         self.live_status.setObjectName("LiveStatus")
@@ -403,21 +408,27 @@ class MainWindow(QMainWindow):
             ("cam_fps", "Camera FPS"),
             ("ai_fps", "AI FPS"),
             ("latency", "Latency"),
-            ("features", "Feature Clips"),
+            ("people", "People"),
             ("threshold", "Threshold"),
             ("alerts", "Alerts"),
+            ("motion", "Motion"),
+            ("model", "Model"),
         ]
         self.live_metric_labels.clear()
         for index, (key, label) in enumerate(live_metrics):
             card = self._metric_card(label, "--")
+            card.setMinimumHeight(58)
+            card.setMaximumHeight(68)
             self.live_metric_labels[key] = card.findChild(QLabel, "MetricValue")
             self.live_metric_grid.addWidget(card, index // 2, index % 2)
         side_layout.addLayout(self.live_metric_grid)
 
-        side_layout.addWidget(self.live_fps)
-        side_layout.addWidget(self.live_features)
         side_layout.addWidget(self.screen_focus_input)
         side_layout.addWidget(self.live_reset_button)
+        self.live_people = QListWidget()
+        self.live_people.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.live_people.setMinimumHeight(130)
+        side_layout.addWidget(self._list_group("Tracked People", self.live_people))
         self.live_plot = pg.PlotWidget()
         self.live_plot.setMinimumHeight(230)
         self.live_plot.setBackground("#000000")
@@ -438,7 +449,7 @@ class MainWindow(QMainWindow):
         self.live_events.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         side_layout.addWidget(self._list_group("Alert Log", self.live_events), 1)
         side_layout.addStretch(1)
-        layout.addWidget(side, 1)
+        layout.addWidget(side_scroll, 1)
         self._reset_live_widgets()
         return page
 
@@ -1291,9 +1302,12 @@ class MainWindow(QMainWindow):
         self._set_live_metric("cam_fps", f"{float(payload.get('camera_fps', 0.0)):.1f}")
         self._set_live_metric("ai_fps", f"{float(payload.get('processed_fps', 0.0)):.1f}")
         self._set_live_metric("latency", f"{float(payload.get('latency_ms', 0.0)):.0f} ms")
-        self._set_live_metric("features", str(payload.get("feature_count", 0)))
+        self._set_live_metric("people", str(payload.get("person_count", 0)))
         self._set_live_metric("threshold", f"{float(self.threshold_input.value()):.2f}")
         self._set_live_metric("alerts", str(len(payload.get("events") or [])))
+        self._set_live_metric("motion", f"{float(payload.get('motion_score', 0.0)) * 100:.0f}%")
+        self._set_live_metric("model", str(payload.get("model_status", "waiting")))
+        self._update_live_people(payload.get("people") or [])
         self.score_history = (self.score_history + [score])[-120:]
         self._update_live_plot()
         self.live_events.clear()
@@ -1336,13 +1350,17 @@ class MainWindow(QMainWindow):
         self.live_score_bar.setValue(0)
         self.live_fps.setText("Camera FPS: --")
         self.live_features.setText("Feature history: 0")
+        self.live_people.clear()
+        self.live_people.addItem("No tracked people")
         for key, value in {
             "cam_fps": "--",
             "ai_fps": "--",
             "latency": "--",
-            "features": "0",
+            "people": "0",
             "threshold": f"{float(self.threshold_input.value()):.2f}",
             "alerts": "0",
+            "motion": "--",
+            "model": "waiting",
         }.items():
             self._set_live_metric(key, value)
         self._set_live_score_bar_color(False)
@@ -1358,6 +1376,17 @@ class MainWindow(QMainWindow):
         self.live_score_bar.setStyleSheet(
             f"#LiveScoreBar::chunk {{ background: {color}; border-radius: 6px; }}"
         )
+
+    def _update_live_people(self, people: list[dict[str, Any]]) -> None:
+        self.live_people.clear()
+        if not people:
+            self.live_people.addItem("No tracked people")
+            return
+        for person in people:
+            self.live_people.addItem(
+                f"{person.get('label', 'Person')}  risk {float(person.get('risk', 0.0)) * 100:.0f}%  "
+                f"emotion {person.get('emotion', 'unknown')}  motion {float(person.get('motion', 0.0)):.0f}"
+            )
 
     def _update_live_plot(self) -> None:
         self.live_plot.clear()

@@ -79,6 +79,7 @@ class MainWindow(QMainWindow):
         self.camera_worker: CameraWorker | None = None
         self.timeline_data: list[dict[str, Any]] = []
         self.score_history: list[float] = []
+        self.live_metric_labels: dict[str, QLabel] = {}
         self.terminal_started_at: float | None = None
         self.analysis_started_at: float | None = None
         self.analysis_timer = QTimer(self)
@@ -366,38 +367,79 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QHBoxLayout(page)
         layout.setContentsMargins(0, 12, 0, 0)
+        layout.setSpacing(14)
         self.live_video_label = QLabel("Start camera for live local detection")
         self.live_video_label.setObjectName("VideoSurface")
         self.live_video_label.setAlignment(Qt.AlignCenter)
         self.live_video_label.setMinimumHeight(560)
+        self.live_video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.live_video_label, 2)
 
         side = QWidget()
         side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.setSpacing(10)
         self.live_status = QLabel("Status: idle")
         self.live_status.setObjectName("LiveStatus")
         self.live_score = QLabel("Score: --")
         self.live_score.setObjectName("LiveScore")
+        self.live_score_bar = QProgressBar()
+        self.live_score_bar.setRange(0, 100)
+        self.live_score_bar.setValue(0)
+        self.live_score_bar.setFormat("Anomaly %p%")
+        self.live_score_bar.setObjectName("LiveScoreBar")
         self.live_fps = QLabel("Camera FPS: --")
         self.live_features = QLabel("Feature history: --")
         self.screen_focus_input = QCheckBox("Screen Focus")
+        self.screen_focus_input.setToolTip("Crop to the likely screen/monitor region before inference. Leave off for webcam/CCTV scenes.")
         self.live_reset_button = QPushButton("Reset Live Buffers")
         self.live_reset_button.clicked.connect(self._reset_live_state)
         side_layout.addWidget(self.live_status)
         side_layout.addWidget(self.live_score)
+        side_layout.addWidget(self.live_score_bar)
+
+        self.live_metric_grid = QGridLayout()
+        live_metrics = [
+            ("cam_fps", "Camera FPS"),
+            ("ai_fps", "AI FPS"),
+            ("latency", "Latency"),
+            ("features", "Feature Clips"),
+            ("threshold", "Threshold"),
+            ("alerts", "Alerts"),
+        ]
+        self.live_metric_labels.clear()
+        for index, (key, label) in enumerate(live_metrics):
+            card = self._metric_card(label, "--")
+            self.live_metric_labels[key] = card.findChild(QLabel, "MetricValue")
+            self.live_metric_grid.addWidget(card, index // 2, index % 2)
+        side_layout.addLayout(self.live_metric_grid)
+
         side_layout.addWidget(self.live_fps)
         side_layout.addWidget(self.live_features)
         side_layout.addWidget(self.screen_focus_input)
         side_layout.addWidget(self.live_reset_button)
         self.live_plot = pg.PlotWidget()
+        self.live_plot.setMinimumHeight(230)
         self.live_plot.setBackground("#000000")
         self.live_plot.setYRange(0, 1)
+        self.live_plot.setMouseEnabled(x=False, y=False)
+        self.live_plot.setLabel("left", "Anomaly")
+        self.live_plot.setLabel("bottom", "Recent live scores")
         self.live_plot.showGrid(x=True, y=True, alpha=0.2)
-        side_layout.addWidget(self._plot_group("Live Score Trend", self.live_plot), 1)
+        side_layout.addWidget(
+            self._plot_group(
+                "Live Score Trend",
+                self.live_plot,
+                "Realtime anomaly probability. Green points are below threshold; red points are above threshold. The dashed line is the current threshold.",
+            ),
+            1,
+        )
         self.live_events = QListWidget()
+        self.live_events.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         side_layout.addWidget(self._list_group("Alert Log", self.live_events), 1)
         side_layout.addStretch(1)
         layout.addWidget(side, 1)
+        self._reset_live_widgets()
         return page
 
     def _build_workflow_panel(self) -> QGroupBox:
@@ -570,6 +612,9 @@ class MainWindow(QMainWindow):
             self.sensitivity_slider.blockSignals(True)
             self.sensitivity_slider.setValue(target)
             self.sensitivity_slider.blockSignals(False)
+        if hasattr(self, "live_metric_labels"):
+            self._set_live_metric("threshold", f"{value:.2f}")
+            self._update_live_plot()
 
     def _device_mode_changed(self) -> None:
         preference = self.device_mode.currentText().lower()
@@ -1091,6 +1136,12 @@ class MainWindow(QMainWindow):
             return
         self.camera_button.setText("Stop Camera")
         self.score_history.clear()
+        self.live_events.clear()
+        self.live_events.addItem("Warming up live model...")
+        self.live_status.setText("Status: starting")
+        self.live_score.setText("Score: --")
+        self._set_live_metric("threshold", f"{float(self.threshold_input.value()):.2f}")
+        self._append_terminal("[runtime] live camera starting")
         self.camera_thread = QThread(self)
         self.camera_worker = CameraWorker(
             self.service,
@@ -1101,7 +1152,7 @@ class MainWindow(QMainWindow):
         self.camera_thread.started.connect(self.camera_worker.run)
         self.camera_worker.frame_ready.connect(lambda frame: self._set_image(self.live_video_label, frame))
         self.camera_worker.result_ready.connect(self._live_result)
-        self.camera_worker.failed.connect(lambda error: self.status.showMessage(error))
+        self.camera_worker.failed.connect(self._live_failed)
         self.camera_worker.stopped.connect(self._camera_stopped)
         self.camera_worker.stopped.connect(self.camera_thread.quit)
         self.camera_thread.finished.connect(self.camera_worker.deleteLater)
@@ -1226,30 +1277,45 @@ class MainWindow(QMainWindow):
         result = payload.get("result") or payload
         score = float(result.get("prob_anomaly", 0.0))
         prediction = result.get("prediction") or payload.get("status", "warming")
-        self.live_status.setText(f"Status: {prediction}")
-        self.live_score.setText(f"Score: {score:.3f}")
+        status = payload.get("status", "scored")
+        if status == "warming":
+            needed = int(payload.get("needed_frames", 0))
+            self.live_status.setText(f"Status: warming ({needed} frames)")
+        else:
+            self.live_status.setText(f"Status: {prediction}")
+        self.live_score.setText(f"Score: {score * 100:.1f}%")
+        self.live_score_bar.setValue(int(round(score * 100)))
+        self._set_live_score_bar_color(prediction == "ANOMALY")
         self.live_fps.setText(f"Camera FPS: {payload.get('camera_fps', 0):.1f}")
         self.live_features.setText(f"Feature history: {payload.get('feature_count', '--')}")
+        self._set_live_metric("cam_fps", f"{float(payload.get('camera_fps', 0.0)):.1f}")
+        self._set_live_metric("ai_fps", f"{float(payload.get('processed_fps', 0.0)):.1f}")
+        self._set_live_metric("latency", f"{float(payload.get('latency_ms', 0.0)):.0f} ms")
+        self._set_live_metric("features", str(payload.get("feature_count", 0)))
+        self._set_live_metric("threshold", f"{float(self.threshold_input.value()):.2f}")
+        self._set_live_metric("alerts", str(len(payload.get("events") or [])))
         self.score_history = (self.score_history + [score])[-120:]
-        self.live_plot.clear()
-        self.live_plot.plot(list(range(len(self.score_history))), self.score_history, pen=pg.mkPen("#f05f57", width=3))
+        self._update_live_plot()
         self.live_events.clear()
         events = payload.get("events") or []
         if not events:
             self.live_events.addItem("No alerts")
         for event in events:
-            self.live_events.addItem(f"{event.get('time', '--')}  {float(event.get('probability', 0)) * 100:.1f}% threat")
+            self.live_events.addItem(
+                f"{event.get('time', '--')}  ANOMALY {float(event.get('probability', 0)) * 100:.1f}%  "
+                f"confidence {float(event.get('confidence', 0)) * 100:.1f}%"
+            )
+
+    def _live_failed(self, error: str) -> None:
+        self.status.showMessage(error)
+        self.live_status.setText("Status: error")
+        self._append_terminal(f"[runtime] live error={error}")
 
     @Slot()
     def _reset_live_state(self) -> None:
         self.service.reset()
         self.score_history.clear()
-        self.live_plot.clear()
-        self.live_events.clear()
-        self.live_events.addItem("No alerts")
-        self.live_status.setText("Status: reset")
-        self.live_score.setText("Score: --")
-        self.live_features.setText("Feature history: 0")
+        self._reset_live_widgets()
         self._append_terminal("[runtime] live buffers reset")
 
     @Slot()
@@ -1259,6 +1325,60 @@ class MainWindow(QMainWindow):
         self.camera_button.setEnabled(True)
         self.camera_button.setText("Start Camera")
         self.live_status.setText("Status: idle")
+        self._append_terminal("[runtime] live camera stopped")
+
+    def _reset_live_widgets(self) -> None:
+        self.live_plot.clear()
+        self.live_events.clear()
+        self.live_events.addItem("No alerts")
+        self.live_status.setText("Status: idle")
+        self.live_score.setText("Score: --")
+        self.live_score_bar.setValue(0)
+        self.live_fps.setText("Camera FPS: --")
+        self.live_features.setText("Feature history: 0")
+        for key, value in {
+            "cam_fps": "--",
+            "ai_fps": "--",
+            "latency": "--",
+            "features": "0",
+            "threshold": f"{float(self.threshold_input.value()):.2f}",
+            "alerts": "0",
+        }.items():
+            self._set_live_metric(key, value)
+        self._set_live_score_bar_color(False)
+        self._update_live_plot()
+
+    def _set_live_metric(self, key: str, value: str) -> None:
+        label = self.live_metric_labels.get(key)
+        if label:
+            label.setText(value)
+
+    def _set_live_score_bar_color(self, anomaly: bool) -> None:
+        color = "#f4212e" if anomaly else "#00ba7c"
+        self.live_score_bar.setStyleSheet(
+            f"#LiveScoreBar::chunk {{ background: {color}; border-radius: 6px; }}"
+        )
+
+    def _update_live_plot(self) -> None:
+        self.live_plot.clear()
+        threshold = float(self.threshold_input.value())
+        self.live_plot.addLine(y=threshold, pen=pg.mkPen("#71767b", width=1, style=Qt.DashLine))
+        if self.score_history:
+            xs = list(range(len(self.score_history)))
+            self.live_plot.plot(xs, self.score_history, pen=pg.mkPen("#ffffff", width=2))
+            normal_x = [x for x, score in zip(xs, self.score_history) if score < threshold]
+            normal_y = [score for score in self.score_history if score < threshold]
+            anomaly_x = [x for x, score in zip(xs, self.score_history) if score >= threshold]
+            anomaly_y = [score for score in self.score_history if score >= threshold]
+            if normal_x:
+                self.live_plot.plot(normal_x, normal_y, pen=None, symbol="o", symbolSize=7, symbolBrush="#00ba7c")
+            if anomaly_x:
+                self.live_plot.plot(anomaly_x, anomaly_y, pen=None, symbol="o", symbolSize=7, symbolBrush="#f4212e")
+            self.live_plot.setXRange(max(0, len(self.score_history) - 60), max(60, len(self.score_history)), padding=0)
+        else:
+            self.live_plot.setXRange(0, 60, padding=0)
+        self.live_plot.setYRange(0, 1, padding=0)
+        self.live_plot.setLimits(yMin=0, yMax=1, minYRange=0.2, maxYRange=1, xMin=0, maxXRange=120)
 
     def _set_metric(self, key: str, value: str) -> None:
         label = self.metric_labels.get(key)

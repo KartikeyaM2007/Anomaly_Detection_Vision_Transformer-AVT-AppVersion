@@ -54,9 +54,53 @@ def _smoke_load_model() -> int:
     return 0
 
 
+def _smoke_live_model() -> int:
+    import numpy as np
+
+    from vad_platform.config import default_config
+    from vad_platform.detector import ViolenceDetectionService
+
+    log_path = ROOT / "artifacts" / "logs" / "packaged_smoke_live_model.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("SMOKE_LIVE_MODEL_START\n", encoding="utf-8")
+
+    def emit(message: str) -> None:
+        print(message, flush=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
+
+    service = ViolenceDetectionService(ROOT, default_config(ROOT))
+    last = {}
+    try:
+        for index in range(20):
+            frame = np.zeros((160, 160, 3), dtype=np.uint8)
+            frame[:, :, 0] = (index * 9) % 255
+            frame[:, :, 1] = 80
+            frame[:, :, 2] = 120
+            frame[40:120, 50 + (index % 8) : 90 + (index % 8), :] = 220
+            last = service.process_live_array(frame, threshold=0.25)
+    except Exception as exc:
+        emit(f"SMOKE_LIVE_MODEL_FAILED {exc}")
+        return 1
+
+    emit(f"SMOKE_LIVE_READY {last.get('ready')}")
+    emit(f"SMOKE_LIVE_STATUS {last.get('status')}")
+    emit(f"SMOKE_LIVE_FEATURES {last.get('feature_count')}")
+    result = last.get("result") or {}
+    emit(f"SMOKE_LIVE_PREDICTION {result.get('prediction')}")
+    emit(f"SMOKE_LIVE_SCORE {float(result.get('prob_anomaly', 0.0)):.4f}")
+    if not last.get("ready") or last.get("status") != "scored":
+        emit("SMOKE_LIVE_MODEL_FAILED not-scored")
+        return 1
+    emit(f"SMOKE_LIVE_MODEL_OK {service._runtime.device_name if service._runtime else 'unknown'}")
+    return 0
+
+
 def main() -> int:
     if "--smoke-load-model" in sys.argv:
         return _smoke_load_model()
+    if "--smoke-live-model" in sys.argv:
+        return _smoke_live_model()
 
     app = QApplication(sys.argv)
     app.setApplicationName("AnomalyGuard")

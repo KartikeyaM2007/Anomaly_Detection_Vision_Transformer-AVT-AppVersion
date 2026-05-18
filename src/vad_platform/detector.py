@@ -65,6 +65,15 @@ class ViolenceDetectionService:
         threshold: float | None = None,
         request_focus_screen: bool = False,
     ) -> dict[str, Any]:
+        frame = _decode_data_url(image_data)
+        return self.process_live_array(frame, threshold=threshold, request_focus_screen=request_focus_screen)
+
+    def process_live_array(
+        self,
+        frame: np.ndarray,
+        threshold: float | None = None,
+        request_focus_screen: bool = False,
+    ) -> dict[str, Any]:
         if not self._ensure_runtime():
             return self._not_ready()
 
@@ -77,7 +86,7 @@ class ViolenceDetectionService:
             self.last_live_result = None
             self.live_frame_count = 0
             self.last_focus_screen = focus_screen
-        frame = _decode_data_url(image_data)
+        frame = _normalize_live_frame(frame)
         if focus_screen:
             frame = _focus_screen_region(frame)
         self.frame_buffer.append(frame)
@@ -455,6 +464,15 @@ def _decode_data_url(image_data: str) -> np.ndarray:
     raw = base64.b64decode(image_data)
     image = Image.open(BytesIO(raw)).convert("RGB")
     return np.asarray(image)
+
+
+def _normalize_live_frame(frame: np.ndarray) -> np.ndarray:
+    frame = np.asarray(frame)
+    if frame.ndim != 3 or frame.shape[2] != 3:
+        raise ValueError("Live frame must be an RGB image with shape HxWx3")
+    if frame.dtype != np.uint8:
+        frame = np.clip(frame, 0, 255).astype(np.uint8)
+    return np.ascontiguousarray(frame)
 
 
 def _focus_screen_region(frame: np.ndarray) -> np.ndarray:

@@ -72,6 +72,49 @@ class PlatformSmokeTests(unittest.TestCase):
         self.assertEqual(result["status"], "warming")
         self.assertEqual(result["needed_frames"], 1)
 
+    def test_live_array_scores_without_base64_roundtrip(self):
+        import numpy as np
+
+        from vad_platform.config import RuntimeConfig
+        from vad_platform.detector import ViolenceDetectionService
+
+        class FakeRuntime:
+            device_name = "fake-cpu"
+
+            def extract_clip_feature(self, clip_frames):
+                return np.ones(8, dtype=np.float32) * (len(clip_frames) / 2.0)
+
+            def predict(self, feature_array, threshold, progress=None, label="window"):
+                score = float(np.clip(np.mean(feature_array) * 0.8, 0.0, 1.0))
+                return {
+                    "prob_normal": 1.0 - score,
+                    "prob_anomaly": score,
+                    "prediction": "ANOMALY" if score >= threshold else "NORMAL",
+                    "confidence": max(score, 1.0 - score),
+                }
+
+        service = ViolenceDetectionService(
+            project_root=ROOT,
+            config=RuntimeConfig(
+                checkpoint_path=ROOT / "artifacts" / "checkpoints" / "best_model.pt",
+                clip_len=2,
+                frame_skip=1,
+                live_clip_stride=1,
+                live_segment_clips=1,
+            ),
+        )
+        service._runtime = FakeRuntime()
+
+        frame = np.zeros((12, 12, 3), dtype=np.uint8)
+        warmup = service.process_live_array(frame, threshold=0.25)
+        scored = service.process_live_array(frame, threshold=0.25)
+
+        self.assertFalse(warmup["ready"])
+        self.assertTrue(scored["ready"])
+        self.assertEqual(scored["status"], "scored")
+        self.assertEqual(scored["result"]["prediction"], "ANOMALY")
+        self.assertEqual(scored["feature_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

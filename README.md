@@ -1,329 +1,380 @@
+# NO API BULLSHIT
 
-# No API Bullshit!!
-# Vision Transformer Violence Detection Platform 
+> In a world where everyone wraps an API and calls it AI, we build it from scratch: local model, local weights, local GPU, local inference.
 
-A Flask-based violence/anomaly detection platform using a trained VideoMAE feature
-extractor plus the project `AnomalyTransformer` checkpoint.
+# AVT / AnomalyGuard
 
-The repository now also includes **AnomalyGuard**, a local PySide6 desktop app
-for offline video anomaly detection with GPU/CPU selection, live analysis
-terminal output, workflow tracking, video preview controls, timeline analytics,
-detected-frame cards, and visual score summaries.
+AVT is an offline violence/anomaly detection desktop application built with a trained VideoMAE feature extractor and a custom Transformer classifier. It is designed to run locally on a laptop or PC without sending videos to a server.
 
-## Project Layout
+The app includes:
+
+- A PySide6 desktop UI.
+- Local model weights packaged with the app.
+- GPU/CPU selection.
+- Uploaded video anomaly analysis.
+- Real-time camera mode.
+- Analysis terminal and live terminal.
+- Timeline, worm/trend, score, coverage, detected-frame, and event-summary analytics.
+- Windows installer output: `release/AVT-Setup.exe`.
+
+## What This Is
+
+| Part | What It Does |
+|---|---|
+| Desktop app | Local Windows UI for upload and live camera analysis |
+| VideoMAE / ViT feature extractor | Converts video clips into 768-dimensional visual features |
+| AnomalyTransformer | Scores temporal feature sequences as normal/anomaly |
+| OpenCV live layer | Tracks people/motion as secondary live support |
+| PyQtGraph charts | Fast desktop charts for timeline, trend, and summaries |
+| PyInstaller + Inno Setup | Builds a shareable Windows installer |
+
+## What This Is Not
+
+| Not This | Because |
+|---|---|
+| Cloud API wrapper | Videos stay local |
+| Browser-only demo | CUDA/GPU desktop runtime works better locally |
+| Fake dashboard | The app loads real model weights and runs inference |
+| Internet-dependent app | Model assets are shipped locally |
+
+## Current Build Outputs
 
 ```text
-vad_project/
-  app.py                         # Root entrypoint: python app.py
-  requirements.txt               # Python dependencies
+dist/AVT/AVT.exe
+release/AVT-Setup.exe
+```
+
+To share the application with another Windows laptop, share:
+
+```text
+release/AVT-Setup.exe
+```
+
+The installer includes the app, model checkpoint, local VideoMAE assets, Python runtime dependencies, OpenCV data, and UI files.
+
+## Main Screenshots
+
+### Desktop / Web Result Example
+
+![Localhost dashboard result](docs/screenshots/localhost-results.png)
+
+This screenshot shows the deployed result view: final prediction, anomaly score, timeline, detected samples, and score summary. The desktop app uses the same core runtime and checkpoint.
+
+### Training Progress
+
+![Training curves](docs/screenshots/training-curves.png)
+
+This chart shows how the model trained over epochs:
+
+| Chart Area | Meaning |
+|---|---|
+| Loss curve | Training/validation loss movement. Lower is better. |
+| Accuracy curve | How often the model predicted correctly during validation. Higher is better. |
+| ROC/AUC curve | Separates normal vs anomaly across thresholds. Higher AUC means stronger separation. |
+
+### Test Evaluation
+
+![Test evaluation](docs/screenshots/test-evaluation.png)
+
+This screenshot explains final model quality:
+
+| Evaluation View | Meaning |
+|---|---|
+| Confusion matrix | Normal/anomaly predictions compared with true labels |
+| ROC curve | Classification quality across decision thresholds |
+| Precision-recall curve | How reliable anomaly detections are when anomaly data is imbalanced |
+
+### Per-Category Accuracy
+
+![Per-category accuracy](docs/screenshots/per-category-accuracy.png)
+
+This chart shows how well the trained model performs for each UCF-Crime category. Green bars represent normal behavior categories; red bars represent anomaly categories. It helps identify where the model is strong and where it may need more data or retraining.
+
+### MP4 Inference Timeline
+
+![Inference timeline](docs/screenshots/inference-timeline.png)
+
+This chart is produced during video inference. Each segment is scored as an anomaly probability. Peaks show the moments where the model believes suspicious activity is most likely.
+
+### Inference Frame Grid
+
+![Inference frame grid](docs/screenshots/inference-frame-grid.png)
+
+This frame grid samples important frames from the analyzed video and attaches the nearest anomaly score. It helps users inspect what the model saw around high-risk moments.
+
+## Model Pipeline
+
+```mermaid
+flowchart LR
+  A["Input video / camera frame"] --> B["Frame sampling"]
+  B --> C["16-frame clip window"]
+  C --> D["VideoMAE feature extractor"]
+  D --> E["768-dimensional clip feature"]
+  E --> F["Temporal feature history"]
+  F --> G["AnomalyTransformer"]
+  G --> H["Normal / Anomaly score"]
+  H --> I["Charts, frame cards, events, terminal logs"]
+```
+
+## Uploaded Video Workflow
+
+```mermaid
+flowchart TD
+  A["Upload video"] --> B["Read FPS, duration, frames"]
+  B --> C["Build overlapping clips"]
+  C --> D["Extract VideoMAE features"]
+  D --> E["Score clips with AnomalyTransformer"]
+  E --> F["Smooth timeline scores"]
+  F --> G["Select detected frames"]
+  G --> H["Show dashboard analytics"]
+```
+
+## Real-Time Workflow
+
+```mermaid
+flowchart TD
+  A["Click Load Model"] --> B["Load checkpoint + VideoMAE locally"]
+  B --> C["Start Camera"]
+  C --> D["Sliding frame buffer"]
+  D --> E["Model warmup until enough frames exist"]
+  E --> F["VideoMAE + Transformer live score"]
+  C --> G["OpenCV person/motion support layer"]
+  F --> H["Main anomaly meter"]
+  G --> I["Tracked people + motion support metrics"]
+  H --> J["Live terminal + live score chart"]
+```
+
+Important: the main live anomaly meter is model-led. Person/motion detection is secondary support for UI context, not the final anomaly decision.
+
+## GPU / CPU Flow
+
+```mermaid
+flowchart LR
+  A["App starts"] --> B{"CUDA GPU available?"}
+  B -- "Yes + Auto/GPU selected" --> C["Use NVIDIA CUDA GPU"]
+  B -- "No or CPU selected" --> D["Use CPU"]
+  C --> E["Show device in dashboard"]
+  D --> E
+```
+
+The app supports:
+
+| Mode | Behavior |
+|---|---|
+| Auto | Uses GPU when CUDA is available, otherwise CPU |
+| GPU | Prefers CUDA GPU |
+| CPU | Forces local CPU inference |
+
+## Models
+
+| Component | Details |
+|---|---|
+| Feature extractor | VideoMAE / ViT-style visual feature extractor |
+| Feature size | 768 dimensions |
+| Classifier | `AnomalyTransformer` temporal encoder |
+| Checkpoint | `artifacts/checkpoints/best_model.pt` |
+| Dataset | UCF-Crime feature dataset |
+| Classes | Normal vs Anomaly |
+| Runtime | PyTorch |
+| Desktop UI | PySide6 |
+
+### Transformer Classifier
+
+The classifier uses temporal features rather than raw individual frames. This matters because violence/anomaly detection depends on motion and sequence context, not just one still image.
+
+```text
+Video frames
+→ 16-frame clips
+→ VideoMAE features
+→ temporal feature sequence
+→ Transformer classifier
+→ anomaly probability
+```
+
+## Analytics Explained
+
+| Analytics View | What It Means | Why It Matters |
+|---|---|---|
+| Prediction | Final normal/anomaly label | Quick decision for the user |
+| Confidence | Strength of the final class decision | Helps judge reliability |
+| Peak Score | Highest anomaly probability in the video | Finds the most suspicious moment |
+| Average Score | Mean anomaly score across clips | Shows overall video risk |
+| Anomaly Coverage | Percent of video marked above threshold | Tells whether anomaly is isolated or widespread |
+| Timeline Graph | Anomaly score over time | Locates when suspicious activity happens |
+| Worm Graph | Smoothed moving trend of anomaly scores | Easier to see rising/falling threat patterns |
+| Detected Frames | Sampled frames near scored moments | Lets user visually inspect model evidence |
+| Event Summary | Compact score/coverage charts | Gives final report-style overview |
+| FPS | Video/camera processing rate | Shows runtime performance |
+| Latency | Time per inference/update | Critical for real-time use |
+| GPU/CPU Device | Active compute device | Confirms whether CUDA is used |
+| Live Terminal | Runtime logs for live mode | Shows model warmup, score source, and status |
+| Analysis Terminal | Upload-analysis logs | Shows model loading and pipeline progress |
+
+## Chart Guide
+
+| Chart | Normal Color | Anomaly Color | Explanation |
+|---|---|---|---|
+| Timeline Graph | Green | Red | Segment-level anomaly score over seconds |
+| Worm Graph | Green | Red | Smoothed trend over segment order |
+| Event Summary Bars | Green | Red | Summary of prediction, peak, and average score |
+| Coverage Bar | Green/Red based on score | Red when high anomaly coverage | Percent of video above threshold |
+| Live Score Trend | Green | Red | Recent real-time model scores |
+
+The dashed line in score charts is the selected threshold. Any score above that line is treated as anomaly.
+
+## Desktop UI Sections
+
+| Section | Purpose |
+|---|---|
+| Top controls | Sensitivity, threshold, device mode, model loading, video upload, camera, info, day/night theme |
+| Video Analysis tab | Uploaded video playback and full analytics |
+| Real Time tab | Camera feed, live anomaly score, tracked people, live terminal |
+| Analysis Workflow | Shows queued → runtime → frames → features → scoring → completed |
+| Analysis Terminal | PowerShell-style upload analysis logs |
+| Live Terminal | Real-time camera/model status logs |
+| Model & Training Info | Training metrics, category list, screenshots |
+
+## Day / Night Theme
+
+The app includes a top-bar theme button:
+
+| Button | Result |
+|---|---|
+| Day | White/black interface |
+| Night | Black/white interface |
+
+Red and green are reserved for anomaly/normal status only.
+
+## Project Structure
+
+```text
+vad_project_app/
+  app.py
+  README.md
+  requirements.txt
+  requirements-desktop.txt
   src/
-    vad_platform/                # Runtime package
-      config.py                  # Thresholds, model paths, runtime config
-      detector.py                # Live/video inference service
-      model.py                   # AnomalyTransformer architecture
-  desktop_app/                   # PySide6 offline desktop application
-    main.py                      # Desktop entrypoint: python -m desktop_app.main
-    workers.py                   # QThread workers for runtime/video/camera analysis
-    ui/main_window.py            # Main dashboard, graphs, terminal, and dialogs
-  web/
-    templates/index.html         # Browser dashboard
-    static/app.js                # Camera, upload, API UI logic
-    static/styles.css            # Dashboard styles
-  scripts/
-    desktop_smoke_test.py        # Headless desktop UI/inference smoke test
-    preprocessing/               # Feature checks and consolidation
-    training/                    # SRU/SRU++ training scripts
+    vad_platform/
+      config.py
+      detector.py
+      model.py
+  desktop_app/
+    main.py
+    workers.py
+    live_intelligence.py
+    ui/main_window.py
   artifacts/
-    checkpoints/best_model.pt    # Deployed trained checkpoint
-    features/                    # Consolidated embeddings/labels
-    models/                      # SRU/SRU++ training outputs
-    reports/                     # Charts, timelines, evaluation outputs
-    logs/                        # Training/runtime logs
-  data/
-    UCF-Crime_dataset/           # UCF-Crime feature dataset
-    samples/                     # Test/sample MP4 files
-  notebooks/                     # Original training/inference notebooks
-  requirements-desktop.txt       # Desktop UI dependencies
+    checkpoints/best_model.pt
+    models/videomae-base/
+    reports/
+  docs/
+    desktop-app.md
+    windows-installer.md
+    screenshots/
+  packaging/
+    avt_desktop.spec
+    installer.iss
+  scripts/
+    desktop_smoke_test.py
+    build_windows_installer.ps1
+  tests/
+    test_smoke.py
+  dist/
+    AVT/AVT.exe
+  release/
+    AVT-Setup.exe
 ```
 
-## Run
+## Run From Source
 
-```bash
+```powershell
 pip install -r requirements.txt
-python app.py
-```
-
-Open:
-
-```text
-http://127.0.0.1:5000
-```
-
-## Desktop App
-
-The project also includes a local PySide6 desktop client for offline-first video
-analysis:
-
-```bash
 pip install -r requirements-desktop.txt
 python -m desktop_app.main
 ```
 
-See `docs/desktop-app.md` for desktop packaging and offline model notes.
-See `docs/windows-installer.md` for building a shareable `AVT-Setup.exe`.
-
-If your default `python` points to an environment without PySide6, run the app
-with the Python interpreter where desktop dependencies are installed. On the
-development machine used here:
+On the development machine used for this build:
 
 ```powershell
 C:\Users\USER\AppData\Local\Programs\Python\Python312\python.exe -m desktop_app.main
 ```
 
-### Desktop Features
+## Build Desktop App
 
-- Offline local inference with the shipped checkpoint.
-- Auto / GPU / CPU runtime selection.
-- Sensitivity slider and exact threshold control.
-- Model load progress and PowerShell-style analysis terminal.
-- Analysis workflow pipeline with queued, runtime, frames, features, scoring,
-  and completed states.
-- Video preview with play/pause, seek/progress bar, timestamp, and optional
-  audio through `PySide6-Addons`.
-- Timeline graph, worm/trend graph, coverage chart, event summary, and score
-  summary chart.
-- Detected-frame cards with time, normal/anomaly label, and score percentage.
-- Model/training info dialog with training screenshots.
-
-### Desktop Analysis Pipeline
-
-```mermaid
-flowchart LR
-  A["Upload MP4"] --> B["Read video frames"]
-  B --> C["Build 16-frame clips"]
-  C --> D["VideoMAE feature extraction"]
-  D --> E["AnomalyTransformer scoring"]
-  E --> F["Timeline segments"]
-  F --> G["Detected frames + event summary"]
-  G --> H["Desktop dashboard"]
+```powershell
+C:\Users\USER\AppData\Local\Programs\Python\Python312\python.exe -m PyInstaller --noconfirm packaging\avt_desktop.spec
 ```
 
-Runtime device selection:
-
-```mermaid
-flowchart LR
-  A["App starts"] --> B{"CUDA GPU available?"}
-  B -- "Yes + Auto/GPU" --> C["Use NVIDIA CUDA GPU"]
-  B -- "No or CPU selected" --> D["Use local CPU"]
-  C --> E["Show active device in dashboard"]
-  D --> E
-```
-
-The app loads:
+Output:
 
 ```text
-artifacts/checkpoints/best_model.pt
+dist/AVT/AVT.exe
 ```
 
-If CUDA PyTorch is installed, the backend uses the NVIDIA GPU automatically.
+## Build Installer
 
-The original notebook was run with PyTorch `2.5.1`. This app is compatible with
-PyTorch `2.5.1+` and explicitly handles the PyTorch `2.6+` checkpoint loading
-change. Inference uses FP32 by default to keep scores closer to the notebook.
-
-## Dependency Checks
-
-Runtime dependencies:
-
-```bash
-pip install -r requirements.txt
-python -m unittest discover -s tests -v
+```powershell
+& "C:\Users\USER\AppData\Local\Programs\Inno Setup 6\ISCC.exe" packaging\installer.iss
 ```
 
-Optional SRU/SRU++ training dependencies:
-
-```bash
-pip install -r requirements-training.txt
-```
-
-Optional browser export dependencies:
-
-```bash
-pip install -r requirements-export.txt
-python scripts/export/export_browser_models.py
-```
-
-Browser-side ONNX artifacts are stored under:
+Output:
 
 ```text
-web/static/models/browser/
-  manifest.json
-  videomae_feature_extractor.onnx
-  anomaly_transformer.onnx
+release/AVT-Setup.exe
 ```
-
-The browser analyzer uses ONNX Runtime Web with WebGPU when available and falls
-back to WASM otherwise. The server analyzer remains available as the reliable
-fallback for browsers or devices that cannot load the larger client models.
-
-On Windows, SRU requires MSVC Build Tools (`cl`) and a CUDA toolkit for its JIT
-kernels. The deployed platform does not need SRU.
-
-## Features
-
-- Live browser camera scoring
-- Upload MP4 analysis
-- Segment timeline and peak threat score
-- Separate live and upload sensitivity controls
-- Live alert hysteresis to avoid low-score alert spam
-- Optional Screen Focus mode for testing with a video playing on another screen
-- Offline PySide6 desktop dashboard
-- GPU/CPU runtime selection
-- Desktop analysis terminal and pipeline visualization
-- Detected frame gallery and event summary charts
-
-## Screenshots
-
-The training and MP4 inference notebooks in `notebooks/` were used to produce
-the process and result screenshots below.
-
-### Desktop/Runtime Example
-
-The desktop app reuses the same runtime and checkpoint as the Flask dashboard.
-After upload, the pipeline reads frames, extracts VideoMAE features, scores
-temporal segments, and visualizes the final anomaly timeline with sampled frames.
-
-![Localhost dashboard result](docs/screenshots/localhost-results.png)
-
-This example result view shows the end-to-end output users should expect in the
-desktop app too: final prediction, peak score, timeline, and frame examples.
-
-### Training Process
-
-`notebooks/UCF_Crime_Anomaly_Detection_Training.ipynb` trains the temporal
-Transformer on extracted UCF-Crime VideoMAE/ViT features, tracks validation
-metrics, and saves the best checkpoint to `artifacts/checkpoints/best_model.pt`.
-
-![Training curves](docs/screenshots/training-curves.png)
-
-The desktop app's **Info** dialog includes this training screenshot so users can
-quickly inspect how the model learned over epochs.
-
-### Training Results
-
-The same notebook evaluates the best checkpoint with confusion matrix, ROC, PR,
-and per-category accuracy reports.
-
-![Test evaluation](docs/screenshots/test-evaluation.png)
-
-![Per-category accuracy](docs/screenshots/per-category-accuracy.png)
-
-These results are also shown inside the desktop **Model & Training Info** dialog
-to explain model quality and category behavior.
-
-### MP4 Inference Process
-
-`notebooks/Anomaly_Detection_MP4_Inference_VideoMAE.ipynb` loads an MP4, builds
-overlapping 16-frame clips, extracts VideoMAE features, and scores the video
-with the trained anomaly model.
-
-![Inference timeline](docs/screenshots/inference-timeline.png)
-
-![Inference frame grid](docs/screenshots/inference-frame-grid.png)
-
-### Web Result View
-
-The Flask dashboard at `http://127.0.0.1:5000/` displays the deployed result
-view for an uploaded sample MP4, including the peak threat score and timeline.
-
-![Localhost dashboard result](docs/screenshots/localhost-results.png)
 
 ## Verification
 
-Run backend tests:
+Run tests:
 
-```bash
-python -m unittest discover -s tests -v
+```powershell
+C:\Users\USER\AppData\Local\Programs\Python\Python312\python.exe -m unittest discover -s tests -v
 ```
 
-Run the desktop smoke test using an interpreter with PySide6 installed:
+Run desktop smoke test:
 
 ```powershell
 C:\Users\USER\AppData\Local\Programs\Python\Python312\python.exe scripts\desktop_smoke_test.py
 ```
 
-Expected smoke-test markers:
-
-```text
-UI_ANALYSIS_DONE ANOMALY 40 100
-TERMINAL_HAS_RUNTIME True
-TERMINAL_HAS_DONE True
-```
-
-Build the Windows desktop bundle and installer:
+Run packaged live-model smoke:
 
 ```powershell
-.\scripts\build_windows_installer.ps1
+dist\AVT\AVT.exe --smoke-live-model
 ```
 
-This produces `dist/AVT/AVT.exe` and, when Inno Setup is installed,
-`release/AVT-Setup.exe`. If Inno Setup is unavailable, the script creates
-`release/AVT-portable.zip` as a shareable fallback.
+Expected marker:
 
-## API
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/health` | GET | Runtime, checkpoint, GPU, threshold status |
-| `/api/live-frame` | POST | Score one live camera frame in rolling context |
-| `/api/analyze-video` | POST | Upload and analyze a video |
-| `/api/reset` | POST | Clear live buffers and alert history |
-
-## Training Utilities
-
-Check consolidated feature files:
-
-```bash
-python scripts/preprocessing/check_features.py \
-  --embeddings artifacts/features/embeddings.npy \
-  --labels artifacts/features/labels.npy
+```text
+SMOKE_LIVE_MODEL_OK
 ```
 
-Consolidate VideoMAE feature folders:
+## Offline Behavior
 
-```bash
-python scripts/preprocessing/preprocess_videomae_features.py
-```
+The desktop app is designed to work without internet after installation:
 
-Train SRU:
+| Asset | Location |
+|---|---|
+| Classifier checkpoint | `artifacts/checkpoints/best_model.pt` |
+| VideoMAE local model | `artifacts/models/videomae-base/` |
+| OpenCV cascade files | bundled under app internals |
+| UI assets/code | bundled in installer |
 
-```bash
-python scripts/training/sru_training.py \
-  --embeddings_path artifacts/features/embeddings.npy \
-  --labels_path artifacts/features/labels.npy \
-  --input_size 768 \
-  --num_classes 2 \
-  --hidden_size 512 \
-  --num_layers 2 \
-  --epochs 100 \
-  --batch_size 16 \
-  --learning_rate 0.001 \
-  --save_dir artifacts/models
-```
+No external model API is required for inference.
 
-Train SRU++:
+## Notes For Future Improvements
 
-```bash
-python scripts/training/srupp_training.py \
-  --embeddings_path artifacts/features/embeddings.npy \
-  --labels_path artifacts/features/labels.npy \
-  --input_size 768 \
-  --num_classes 2 \
-  --hidden_size 512 \
-  --proj_size 384 \
-  --num_layers 2 \
-  --epochs 100 \
-  --batch_size 16 \
-  --learning_rate 0.001 \
-  --save_dir artifacts/models
-```
+| Improvement | Why |
+|---|---|
+| ONNX/TensorRT export | Faster inference and smaller runtime |
+| YOLO/MediaPipe person detector | Stronger real-time person detection |
+| Dedicated emotion model | More accurate expression/emotion labels |
+| Larger violence-specific training set | Better real-world generalization |
+| RTSP camera support | CCTV/IP camera deployment |
+| PDF/CSV reports | Professional export workflow |
+
+## Final Line
+
+NO API BULLSHIT.  
+No rented intelligence pretending to be engineering.  
+Local model. Local weights. Local GPU. Built from scratch.

@@ -6,6 +6,9 @@
 
 AVT is an offline violence/anomaly detection desktop application built with a trained VideoMAE feature extractor and a custom Transformer classifier. It is designed to run locally on a laptop or PC without sending videos to a server.
 
+# Web Version : https://huggingface.co/spaces/Kartikeym2007/Anomaly_Detection_Vision_Transformer-AVT  ||  Note Since its hosted on  Hugging Face , you can just see the layout and run model on ( cpu / hugging face free tier cpus )- So it will be slow!! 
+# Try the app , to get actual value ! ;)
+
 The app includes:
 
 - A PySide6 desktop UI.
